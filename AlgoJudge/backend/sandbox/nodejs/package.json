@@ -1,0 +1,20 @@
+{
+  "name": "sandbox",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "big.js": "^7.0.1",
+    "dayjs": "^1.11.23",
+    "lodash": "^4.18.1",
+    "mathjs": "^15.2.0",
+    "seedrandom": "^3.0.5"
+  }
+}
