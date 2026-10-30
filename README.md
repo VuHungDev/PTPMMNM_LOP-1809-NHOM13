@@ -1,124 +1,151 @@
 # AlgoJudge — Hệ thống Luyện tập & Chấm bài Lập trình Trực tuyến
 
-Hệ thống luyện tập và chấm bài tự động với các bài tập( 6 ngôn ngữ C / C++ / Java / Python / PHP / JS),
-chạy trên **XAMPP + MySQL**, dùng được cả **Windows & Linux**, với
-bộ soạn thảo **Monaco Editor **.
+Hệ thống luyện tập và chấm bài tự động, hỗ trợ 6 ngôn ngữ (C / C++ / Java /
+Python / PHP / JS), chạy trên **XAMPP + MySQL** (Windows & Linux), soạn thảo
+bằng **Monaco Editor**, kèm **trợ lý AI** hỗ trợ tạo bài và thao tác nhanh.
 
-## 1. Kiến trúc:
+## 1. Kiến trúc
 
 ```text
 AlgoJudge/
-├── index.php              → redirect về frontend/
-├── backend/               → PHẦN XỬ LÝ + LƯU TRỮ (nhóm tự viết)
-│   ├── config/bootstrap.php   → kết nối MySQL (thử 3307 rồi 3306), hằng số, helper
-│   ├── lib/Auth.php           → đăng nhập, phân quyền 3 vai trò, kiểm tra xem mã
+├── index.php                  → redirect về frontend/
+├── backend/                   → XỬ LÝ + LƯU TRỮ (nhóm tự viết)
+│   ├── config/bootstrap.php   → MySQL (thử cổng 3307 rồi 3306), hằng số, helper e()/url()
+│   ├── config/ai.php          → cấu hình AI (provider, model, api_key — KHÔNG commit key thật)
+│   ├── lib/Auth.php           → đăng nhập, phân quyền 3 vai trò (student/teacher/admin)
 │   ├── lib/JudgeEngine.php    → điều phối chấm, so sánh output, tổng hợp (6 ngôn ngữ)
-│   ├── lib/JudgeQueue.php     → điều phối hàng đợi + heartbeat + fallback khi daemon chết
+│   ├── lib/JudgeQueue.php     → hàng đợi + heartbeat + fallback khi daemon chết
+│   ├── lib/AIHelper.php       → gọi AI (Gemini) bóc tách đề bài, chat tự do
+│   ├── lib/AIAssistant.php    → định tuyến ý định, tra cứu số liệu, thao tác có xác nhận
 │   ├── api/                   → submit, run_custom, save_draft, get_draft,
-│   │                            submission_status, rejudge, export_excel (JSON/xls)
-│   ├── worker/judge_daemon.php→ CLI worker cách ly (không chạy trong Web)
-│   ├── database/              → schema.sql, seed_10_problems.php (10 bài gốc),
-│   │                            seed_60_problems.php (50 bài mới), migrate_v2/v3/v4.sql
-│   ├── reference_solutions/   → mã đúng/sai đối chiếu 10 bài gốc
+│   │                            submission_status, session_status, rejudge, retry_run,
+│   │                            export_excel, ai_parse_problem, ai_create_problem, ai_chat
+│   ├── worker/judge_daemon.php→ CLI worker chấm cách ly (không chạy trong Web)
+│   ├── database/              → schema.sql, seed 10 + 60 bài, migrate_v2 → v6
+│   ├── reference_solutions/   → mã đúng/sai đối chiếu các bài gốc
 │   └── tests/                 → run_mandatory_tests.php (5 phép thử bắt buộc)
-└── frontend/              → PHẦN GIAO DIỆN (nhóm tự viết giao diện, dùng lại thư viện)
-    ├── index.php (lọc chủ đề/độ khó/**ngôn ngữ** + phân trang) / workspace.php (IDE tự chọn ngôn ngữ gợi ý) / submissions.php (lọc + phân trang + xuất Excel)
-    ├── leaderboard.php (BXH XP) / profile.php (hồ sơ cá nhân)
-    ├── auth/ / instructor/ (problems CRUD, dataset_versions, queue, progress) / admin/ / partials/
-    └── assets/css + assets/js
+└── frontend/                  → GIAO DIỆN
+    ├── index.php (lọc chủ đề/độ khó/ngôn ngữ + phân trang)
+    ├── workspace.php (IDE, tự chọn ngôn ngữ gợi ý) / playground.php (sân chơi tự do)
+    ├── submissions.php / leaderboard.php (BXH XP) / profile.php
+    ├── instructor/            → problems, problem_form (wizard 3 bước + tự lưu nháp),
+    │                            ai_chat, dataset_versions, queue, progress, rejudge
+    ├── admin/ (users, user_form) / auth/ / partials/ (layout, sidebar, ai_widget)
+    └── assets/css + assets/js (modules, pages, vendor/alpine.min.js)
 ```
 
 ## 2. Tài khoản demo (mật khẩu chung `123456`)
 
-| Username   | Vai trò   | Lớp        |
-|------------|-----------|------------|
-| `sv_son`   | student   | CNTT-18-02 |
-| `sv_phuong`| student   | CNTT-18-02 |
-| `sv_khaclop`| student  | CNTT-18-01 |
-| `gv_cntt`  | teacher   | CNTT-18-02 |
-| `admin`    | admin     | ALL        |
+| Username    | Vai trò | Lớp        |
+|-------------|---------|------------|
+| `sv_son`    | student | CNTT-18-02 |
+| `sv_phuong` | student | CNTT-18-02 |
+| `sv_khaclop`| student | CNTT-18-01 |
+| `gv_cntt`   | teacher | CNTT-18-02 |
+| `admin`     | admin   | ALL        |
 
-Đăng ký mới chỉ tạo được tài khoản **student**; admin cấp tài khoản mọi vai trò trong trang Quản trị User
-(tạo user chọn vai trò student/teacher/admin, đổi vai trò/lớp, reset mật khẩu, **khóa/mở tài khoản**,
-xóa tài khoản chưa có dữ liệu — tài khoản còn bài nộp/bài tập chỉ được khóa để giữ lịch sử).
+Đăng ký mới chỉ tạo được **student**; admin cấp tài khoản mọi vai trò trong
+trang Quản trị (đổi vai trò/lớp, reset mật khẩu, **khóa/mở** tài khoản, xóa tài
+khoản chưa có dữ liệu — tài khoản còn bài nộp chỉ được khóa để giữ lịch sử).
 
 ## 3. Cài đặt & chạy trên XAMPP (Windows)
 
-**Bước 0 — Khởi động MySQL của XAMPP** (XAMPP Control Panel → MySQL → Start).
+**Bước 0 — Khởi động MySQL** (XAMPP Control Panel → MySQL → Start).
 Project thử cổng `3307` trước rồi `3306`, user `root`, mật khẩu rỗng.
 
-**Bước 1 — Khởi tạo CSDL & dữ liệu mẫu (60 bài, 300 test cases):**
+**Bước 1 — Khởi tạo CSDL & dữ liệu mẫu (60+ bài, hàng trăm test case):**
 
 ```bash
 C:\xampp\mysql\bin\mysql.exe -u root < backend\database\schema.sql
-C:\xampp\mysql\bin\mysql.exe -u root algojudge < backend\database\migrate_v2.sql
-C:\xampp\mysql\bin\mysql.exe -u root algojudge < backend\database\migrate_v3.sql
-C:\xampp\mysql\bin\mysql.exe -u root algojudge < backend\database\migrate_v4.sql
-C:\xampp\php\php.exe backend\database\seed_10_problems.php
-C:\xampp\php\php.exe backend\database\seed_60_problems.php
+C:\xampp\mysql\bin\mysql.exe -u root algojudge < backend\database\migrations\migrate_v2.sql
+C:\xampp\mysql\bin\mysql.exe -u root algojudge < backend\database\migrations\migrate_v3.sql
+C:\xampp\mysql\bin\mysql.exe -u root algojudge < backend\database\migrations\migrate_v4.sql
+C:\xampp\mysql\bin\mysql.exe -u root algojudge < backend\database\migrations\migrate_v5.sql
+C:\xampp\mysql\bin\mysql.exe -u root algojudge < backend\database\migrations\migrate_v6.sql
+C:\xampp\php\php.exe backend\database\seeds\seed_10_problems.php
+C:\xampp\php\php.exe backend\database\seeds\seed_60_problems.php
 ```
 
-Mỗi bài gắn 1 **ngôn ngữ gợi ý** (`suggested_lang`, 10 bài × 6 ngôn ngữ) để lọc ở trang Luyện tập;
+(Nếu đã có CSDL bản cũ: chạy các migrate còn thiếu rồi seed lại.)
+
+Mỗi bài gắn 1 **ngôn ngữ gợi ý** (`suggested_lang`) để lọc ở trang Luyện tập;
 IDE tự chọn sẵn ngôn ngữ đó nhưng học viên vẫn được nộp mọi ngôn ngữ.
 
-(Nếu đã có CSDL từ bản demo cũ: chạy `migrate_v2.sql` → `migrate_v4.sql` rồi seed lại.)
-
-**Bước 2 — Mở ứng dụng:** Apache (XAMPP) → Start, rồi vào
+**Bước 2 — Mở ứng dụng:** Apache (XAMPP) → Start, vào
 `http://localhost/AlgoJudge/` (tự chuyển về `frontend/`).
 
-**Bước 2b — Chạy Judge Daemon thường trực (khuyên dùng):** mở file `start-judge-daemon.bat`
-(chuột phải → Run), giữ cửa sổ mở trong suốt buổi chấm. Khi daemon sống, nút Chạy thử /
-Nộp bài phản hồi tức thì. Nếu quên mở, hệ thống tự chấm fallback trong request
-(vẫn chạy trong tiến trình OS con riêng, không eval trong Web) nên không bao giờ kẹt QUEUED.
+**Bước 2b — Judge Daemon thường trực (khuyên dùng):** mở
+`start-judge-daemon.bat` (chuột phải → Run), giữ cửa sổ mở trong buổi chấm.
+Khi daemon sống, Chạy thử / Nộp bài phản hồi tức thì. Nếu quên mở, API tự
+chấm fallback trong request (tiến trình OS con riêng, không eval trong Web)
+nên không bao giờ kẹt QUEUED.
 
-**Bước 3 — Cài toolchain chấm bài** (cần cho các ngôn ngữ muốn chấm):
+**Bước 3 — Toolchain chấm bài** (cài ngôn ngữ nào muốn chấm):
 `python`, `g++`/`gcc`, `javac`/`java`, `node`. PHP dùng chính PHP của XAMPP.
-Nếu thiếu toolchain của ngôn ngữ nào (VD máy chưa cài `g++`), bài nộp ngôn ngữ đó sẽ nhận
-`CE` kèm thông báo thiếu trình biên dịch — không ảnh hưởng các ngôn ngữ khác.
+Thiếu toolchain ngôn ngữ nào → bài nộp ngôn ngữ đó nhận `CE` kèm thông báo,
+không ảnh hưởng ngôn ngữ khác.
 
-**Bước 4 — Chạy kiểm thử 5 phép thử bắt buộc:**
+**Bước 4 — Kiểm thử 5 phép thử bắt buộc:**
 
 ```bash
 C:\xampp\php\php.exe backend\tests\run_mandatory_tests.php
 ```
 
-## 4. Hai luồng demo
+**Bước 5 — (Tùy chọn) Bật AI thật:** điền key vào `backend/config/ai.php`
+(`provider`, `model`, `api_key`). Chưa có key vẫn dùng được toàn bộ luồng
+chatbot nhờ chế độ bóc tách tự động cục bộ.
 
-**Tình huống 1 (học viên):** Đăng nhập `sv_son/123456` → Chọn bài → viết mã (chọn 1 trong 6 ngôn ngữ)
-→ Chạy thử (Custom Input) → Nộp bài → theo dõi chấm → xem kết quả & mã đã nộp.
+## 4. Các luồng demo
 
-**Tình huống 2 (giảng viên):** Đăng nhập `gv_cntt/123456` → Quản lý Bài tập (tạo/sửa/ẩn hiện)
-→ Bộ Test & Chấm lại (tạo phiên bản mới → chấm lại → đối chiếu 2 lần chấm, lịch sử giữ nguyên)
-→ Tiến độ HV (theo dõi, xuất Excel).
+**Học viên:** đăng nhập `sv_son/123456` → chọn bài → viết mã (1 trong 6 ngôn
+ngữ) → Chạy thử → Nộp bài → theo dõi chấm → xem kết quả & mã đã nộp → hỏi
+trợ lý AI ✨ về cách làm (chỉ gợi ý hướng, không đưa code giải).
 
-## 5. Danh sách verdict & quy tắc đã công bố
+**Giảng viên:** đăng nhập `gv_cntt/123456` → tạo bài bằng form wizard 3 bước
+(tự lưu nháp, lỗi chỉ sửa ô sai) hoặc dán đề vào chatbot AI ✨ (Xem trước
+trong form / Đẩy lên luôn) → Bộ test & phiên bản → Chấm lại (giữ lịch sử) →
+Tiến độ học viên → Xuất Excel. Thao tác vặt (thêm test, ẩn/hiện bài, chấm
+lại, xuất báo cáo) có thể nhờ chatbot làm hộ — luôn hỏi **Đồng ý/Hủy** trước.
 
-`AC` (đúng hết) · `WA` (sai đáp án, kể cả sai biên) · `CE` (lỗi biên dịch/cú pháp) ·
-`RE` (lỗi khi chạy, exit code ≠ 0) · `TLE` (vượt giới hạn thời gian / lặp vô hạn) ·
-`SYS_ERR` (bộ thực thi bị ngắt — không chấm người học sai, chờ thử lại).
+## 5. Verdict & quy tắc đã công bố
 
-- Gửi lại cùng yêu cầu nộp (cùng `idempotency_key`) → trả về đúng mã bài nộp cũ, không tạo bản trùng.
-- Một yêu cầu nộp mới có chủ ý (khóa khác) → tạo bài nộp mới.
-- Kết quả của lần chấm cũ về sau không ghi đè lần chấm mới (`latest_run_id`).
-- Người A không đọc được mã riêng của B; API/giao diện không lộ test kín, đáp án hay thông tin kết nối bộ thực thi.
+`AC` (đúng hết) · `WA` (sai đáp án, kể cả sai biên) · `CE` (lỗi biên dịch/cú
+pháp) · `RE` (lỗi khi chạy, exit code ≠ 0) · `TLE` (vượt giới hạn thời gian /
+lặp vô hạn) · `SYS_ERR` (bộ thực thi bị ngắt — không chấm người học sai, chờ
+thử lại).
 
-## 6. Tính năng mở rộng
+- Gửi lại cùng yêu cầu nộp (cùng `idempotency_key`) → trả đúng bài nộp cũ,
+  không tạo bản trùng.
+- Kết quả lần chấm cũ về sau không ghi đè lần chấm mới (`latest_run_id`).
+- Người A không đọc được mã riêng của B; API/giao diện không lộ test kín,
+  đáp án hay thông tin kết nối bộ thực thi.
+- Chatbot: đọc thoải mái, **ghi phải xác nhận** (token 10 phút); không xóa dữ
+  liệu, không sửa điểm/XP, không đổi vai trò, không SQL tự do — mỗi việc một
+  API cố định đã kiểm tra quyền.
 
-- **Phân trang** mọi danh sách dài: bài tập (8/trang), bài nộp (15/trang + lọc theo bài/kết quả/lớp/username), user (10/trang + lọc vai trò/từ khóa).
-- **Xuất Excel (.xls)** mở trực tiếp bằng Excel: lịch sử bài nộp (theo đúng bộ lọc hiện tại) và báo cáo tiến độ học viên (số bài AC, tỉ lệ %, lần nộp cuối).
-- **Quản lý bài tập (CRUD)** cho giảng viên: tạo bài mới (slug, mô tả, ví dụ, bộ test nhiều ca), sửa (tự tạo phiên bản mới giữ lịch sử), ẩn/hiện.
-- **Báo cáo tiến độ học viên**: thanh % hoàn thành, lọc theo lớp/từ khóa, teacher chỉ thấy lớp mình.
-- **Bảng xếp hạng XP** (`Bảng xếp hạng`): Easy +10 / Medium +20 / Hard +30 XP cho lần giải đúng đầu tiên mỗi bài; không cộng lại khi AC lặp.
-- **Hồ sơ cá nhân** (bấm tên mình trên navbar): XP, hạng, tiến độ %, verdict tốt nhất từng bài, 10 bài nộp gần nhất.
-- **Tỉ lệ AC theo bài** trên trang Luyện tập: % người giải đúng / người đã thử.
-- **Giám sát hàng đợi chấm** (`Bộ Test & Chấm lại → Hàng đợi chấm`, teacher/admin): bảng đếm QUEUED/RUNNING/SYS_ERROR/COMPLETED,
-  cảnh báo run kẹt (quá 5 phút), nút **Thử lại** tạo lượt chấm `SYS_RETRY` mới mà không xóa lịch sử — người học không bị chấm sai vì lỗi hệ thống.
-- **Chống chấm trùng**: bấm Chấm lại / Thử lại khi bài nộp đang có lượt chấm chờ xử lý sẽ bị từ chối (HTTP 409) thay vì tạo 2 run song song.
-- **Fallback khi daemon chết**: API tự chấm trong request (vẫn qua tiến trình OS con riêng) nếu worker không heartbeat >60s, nên Chạy thử / Nộp bài không bao giờ kẹt QUEUED.
-- **Tổng hợp kết quả** trên trang Tiến độ HV: thanh phân bố verdicts (AC/WA/TLE/RE/CE/SYS_ERR) theo phạm vi lớp đang xem.
+## 6. Tính năng chính
 
-## 7. Ghi chú nhóm & nguồn tái sử dụng
+- **Form tạo bài wizard 3 bước** (Thông tin → Nội dung đề → Test chấm): slug
+  tự sinh từ tiêu đề, cài đặt nâng cao gấp gọn, validate từng bước, lỗi chỉ
+  sửa ô sai, **tự lưu nháp** (localStorage + giữ lại khi submit lỗi).
+- **Trợ lý AI bong bóng ✨** mọi trang: hỏi đáp cách dùng, tra cứu số liệu
+  thật (sĩ số, hàng đợi chấm, bài khó nhất...), tạo bài từ đề dán vào, tạo tài
+  khoản, thêm test case, bật/tắt bài, chấm lại, thử lại run, xuất báo cáo —
+  thao tác ghi luôn có bước xác nhận.
+- **Quản lý bài tập (CRUD):** tạo bài, sửa (tự tạo phiên bản mới giữ lịch sử),
+  ẩn/hiện; bộ test nhiều ca (công khai/kín, dữ liệu biên).
+- **Báo cáo tiến độ học viên:** % hoàn thành, lọc lớp/từ khóa, teacher chỉ
+  thấy lớp mình, phân bố verdicts, xuất Excel.
+- **Bảng xếp hạng XP:** Easy +10 / Medium +20 / Hard +30 cho lần AC đầu tiên
+  mỗi bài; không cộng lại khi AC lặp. Hồ sơ cá nhân: XP, hạng, verdict tốt
+  nhất từng bài, 10 bài nộp gần nhất; tỉ lệ AC theo bài ở trang Luyện tập.
+- **Chống chấm trùng & fallback daemon:** bấm Chấm lại/Thử lại khi đang có
+  lượt chấm chờ xử lý bị từ chối (HTTP 409); daemon chết >60s không heartbeat
+  → API tự chấm đồng bộ; cảnh báo run kẹt quá 5 phút.
+- **Phân trang + xuất Excel (.xls)** mọi danh sách dài, đúng bộ lọc hiện tại.
 
-Xem [CONTRIBUTING.md](CONTRIBUTING.md) (phân công, quy trình issue/review) và
-[THIRD_PARTY.md](THIRD_PARTY.md) (mã nhóm tự viết vs thư viện/tài nguyên dùng lại).
-Giấy phép: [LICENSE](LICENSE) (MIT).
+## 7. Tài liệu nhóm
+
+Xem [CONTRIBUTING.md](CONTRIBUTING.md) (phân công, quy trình issue/review, quy
+tắc code) và [THIRD_PARTY.md](THIRD_PARTY.md) (mã tự viết vs thư viện dùng
+lại). Giấy phép: [LICENSE](LICENSE) (MIT).

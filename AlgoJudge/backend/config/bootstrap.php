@@ -6,6 +6,31 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
+// Nạp biến môi trường từ file .env ở gốc project (nếu có) — chứa key AI, không commit.
+if (!function_exists('aj_load_env')) {
+    function aj_load_env(string $dir): void
+    {
+        $f = rtrim($dir, '/\\') . DIRECTORY_SEPARATOR . '.env';
+        if (!is_readable($f)) return;
+        foreach (file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+            $line = trim($line);
+            if ($line === '' || $line[0] === '#') continue;
+            $pos = strpos($line, '=');
+            if ($pos === false) continue;
+            $k = trim(substr($line, 0, $pos));
+            $v = trim(substr($line, $pos + 1));
+            if (strlen($v) >= 2 && (($v[0] === '"' && substr($v, -1) === '"') || ($v[0] === "'" && substr($v, -1) === "'"))) {
+                $v = substr($v, 1, -1);
+            }
+            if ($k !== '' && getenv($k) === false && !isset($_ENV[$k])) {
+                putenv("$k=$v");
+                $_ENV[$k] = $v;
+            }
+        }
+    }
+}
+aj_load_env(dirname(__DIR__, 2));
+
 // URL gốc của ứng dụng khi chạy trên XAMPP (http://localhost/AlgoJudge)
 define('BASE_URL', '/AlgoJudge');
 define('BE_DIR', dirname(__DIR__));            // .../AlgoJudge/backend

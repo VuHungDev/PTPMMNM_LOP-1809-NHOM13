@@ -48,11 +48,12 @@ $sbGroups = [
         'key'    => 'teach',
         'label'  => 'Quản lý giảng dạy',
         'icon'   => 'teach',
-        'active' => ['probs', 'prob_new', 'data', 'rejudge', 'queue', 'prog'],
+        'active' => ['probs', 'prob_new', 'prob_ai', 'data', 'rejudge', 'queue', 'prog'],
         'roles'  => ['teacher', 'admin'],
         'items'  => [
             ['nav' => 'probs',    'href' => '/frontend/instructor/problems.php',         'label' => 'Danh sách bài tập',    'icon' => 'layers'],
             ['nav' => 'prob_new', 'href' => '/frontend/instructor/problem_form.php',    'label' => 'Thêm bài tập',         'icon' => 'teach'],
+            ['nav' => 'prob_ai',  'href' => '/frontend/instructor/ai_chat.php',         'label' => 'AI tạo bài tập',       'icon' => 'brand'],
             ['nav' => 'data',     'href' => '/frontend/instructor/dataset_versions.php', 'label' => 'Bộ test & phiên bản',  'icon' => 'chart'],
             ['nav' => 'rejudge',  'href' => '/frontend/instructor/rejudge.php',        'label' => 'Chấm lại & đối chiếu', 'icon' => 'chart'],
             ['nav' => 'queue',    'href' => '/frontend/instructor/queue.php',            'label' => 'Hàng đợi chấm',        'icon' => 'inbox'],

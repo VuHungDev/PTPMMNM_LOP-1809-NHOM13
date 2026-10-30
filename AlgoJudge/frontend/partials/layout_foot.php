@@ -1,4 +1,5 @@
 </main>
+<?php if (!empty($user)) require __DIR__ . '/ai_widget.php'; ?>
 <script src="<?= url('/frontend/assets/js/app.js') ?>"></script>
 <script type="module">
     // Module dùng chung mọi trang đăng nhập: sidebar + giám sát phiên (khóa/xóa → đá ra).
