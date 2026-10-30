@@ -20,8 +20,17 @@
   width:28px; height:28px; cursor:pointer; font-size:15px; }
 #ai-msgs { padding:12px 14px; overflow-y:auto; min-height:140px; max-height:320px; font-size:0.87rem; }
 #ai-msgs a { color:#4f46e5; }
-#ai-input-row { display:flex; gap:8px; padding:10px 12px; border-top:1px solid #e2e8f0; }
-#ai-input { flex:1; border:1px solid #cbd5e1; border-radius:8px; padding:8px 10px; font-size:0.85rem; resize:vertical; }
+#ai-input-row { display:flex; align-items:flex-end; gap:6px; padding:10px 12px; border-top:1px solid #e2e8f0;
+  background:#f8fafc; }
+#ai-input-wrap { flex:1; display:flex; align-items:center; background:#fff; border:1px solid #cbd5e1;
+  border-radius:22px; padding:4px 6px 4px 14px; transition:border-color .15s, box-shadow .15s; }
+#ai-input-wrap:focus-within { border-color:#4f46e5; box-shadow:0 0 0 3px rgba(79,70,229,.12); }
+#ai-input { flex:1; border:none; outline:none; background:transparent; padding:7px 0; font-size:0.85rem;
+  resize:none; max-height:110px; line-height:1.35; font-family:inherit; }
+#ai-send { flex:0 0 auto; width:34px; height:34px; min-width:0; padding:0; border-radius:50%;
+  display:flex; align-items:center; justify-content:center; font-size:0; }
+#ai-send svg { width:16px; height:16px; }
+#ai-send:disabled { opacity:.45; }
 #ai-preview { border-top:1px solid #e2e8f0; padding:12px 14px; overflow-y:auto; max-height:300px; font-size:0.85rem; }
 #ai-preview[hidden] { display:none; }
 #ai-preview input, #ai-preview textarea, #ai-preview select { width:100%; border:1px solid #cbd5e1;
@@ -45,8 +54,12 @@
     <div id="ai-msgs"></div>
     <div id="ai-preview" hidden></div>
     <div id="ai-input-row">
-        <textarea id="ai-input" rows="2" placeholder="Hỏi gì đó, hoặc dán đề bài... (Ctrl+Enter để gửi)"></textarea>
-        <button class="ai-btn ai-btn-p" id="ai-send">Gửi</button>
+        <div id="ai-input-wrap">
+            <textarea id="ai-input" rows="1" placeholder="Hỏi gì đó, hoặc dán đề bài..."></textarea>
+        </div>
+        <button class="ai-btn ai-btn-p" id="ai-send" title="Gửi (Enter)" aria-label="Gửi">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+        </button>
     </div>
 </div>
 
@@ -62,12 +75,30 @@
     const preview = document.getElementById('ai-preview');
     const base = '<?= url('') ?>';
     const isStaff = <?= in_array($user['role'] ?? '', ['teacher', 'admin'], true) ? 'true' : 'false' ?>;
+    const HIST_KEY = 'ai-chat-history';
 
-    msgs.innerHTML = `<div style="background:#f1f5f9; border-radius:10px; padding:9px 12px; margin-bottom:8px;">`
-        + (isStaff
-            ? `Chào thầy/cô! Tôi có thể:<br>• Trả lời cách dùng, tra cứu số liệu lớp<br>• <b>Dán đề</b> → tôi tạo khung bài tập<br>• Tạo tài khoản, thêm test, chấm lại... <b>(luôn hỏi xác nhận trước)</b>`
-            : `Chào bạn! Tôi có thể giải thích cách luyện tập, nộp bài, xem điểm, gợi ý hướng làm bài (không đưa code giải).`)
-        + `</div>`;
+    function loadHistory() {
+        try { return JSON.parse(sessionStorage.getItem(HIST_KEY) || '[]'); } catch (_) { return []; }
+    }
+    function saveHistory(list) {
+        try { sessionStorage.setItem(HIST_KEY, JSON.stringify(list.slice(-60))); } catch (_) {}
+    }
+    const history = loadHistory();
+
+    function greeting() {
+        return `<div style="background:#f1f5f9; border-radius:10px; padding:9px 12px; margin-bottom:8px;">`
+            + (isStaff
+                ? `Chào thầy/cô! Tôi có thể:<br>• Trả lời cách dùng, tra cứu số liệu lớp<br>• <b>Dán đề</b> → tôi tạo khung bài tập<br>• Tạo tài khoản, thêm test, chấm lại... <b>(luôn hỏi xác nhận trước)</b>`
+                : `Chào bạn! Tôi có thể giải thích cách luyện tập, nộp bài, xem điểm, gợi ý hướng làm bài (không đưa code giải).`)
+            + `</div>`;
+    }
+
+    if (history.length) {
+        msgs.innerHTML = '';
+        history.forEach(m => bubble(m.text, m.mine, false));
+    } else {
+        msgs.innerHTML = greeting();
+    }
 
     fab.onclick = () => { panel.hidden = !panel.hidden; if (!panel.hidden) input.focus(); };
     document.getElementById('ai-panel-x').onclick = () => panel.hidden = true;
@@ -78,13 +109,17 @@
         h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
         return h.replace(/\n/g, '<br>');
     }
-    function bubble(html, mine) {
+    function bubble(html, mine, record = true) {
         const d = document.createElement('div');
         d.className = mine ? '' : 'ai-md';
         d.style.cssText = 'border-radius:10px; padding:9px 12px; margin-bottom:8px; background:' + (mine ? '#dbeafe' : '#f1f5f9') + ';' + (mine ? 'margin-left:12%;' : 'margin-right:12%;');
         d.innerHTML = html;
         msgs.appendChild(d);
         msgs.scrollTop = msgs.scrollHeight;
+        if (record) {
+            history.push({ text: html, mine, raw: true });
+            saveHistory(history);
+        }
     }
 
     async function send() {
@@ -92,6 +127,7 @@
         if (!text) return;
         bubble(md(text), true);
         input.value = '';
+        input.style.height = 'auto';
         preview.hidden = true;
         const typing = document.createElement('div');
         typing.style.cssText = 'color:#64748b; font-size:0.8rem; margin-bottom:8px;';
@@ -106,7 +142,7 @@
             const j = await res.json();
             typing.remove();
             if (!j.ok) { bubble('Lỗi: ' + md(j.error || 'không rõ'), false); return; }
-            if (j.kind === 'parse_problem') { renderPreview(j.data, j.source); bubble('Đã tách xong đề — kiểm tra khung bên dưới rồi chọn <b>Xem trước</b> hoặc <b>Đẩy lên luôn</b> nhé.', false); }
+            if (j.kind === 'parse_problem') { renderPreview(j.data, j.source); bubble('Đã tách xong đề — kiểm tra khung bên dưới rồi chọn <b>Xem trước</b> hoặc <b>Thêm bài</b> nhé.', false); }
             else if (j.kind === 'confirm') { renderConfirm(j); }
             else { bubble(md(j.answer), false); }
         } catch (e) {
@@ -117,13 +153,17 @@
         }
     }
     btnSend.onclick = send;
-    input.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send(); });
+    input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+    input.addEventListener('input', () => {
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 110) + 'px';
+    });
 
     // Thẻ xác nhận cho thao tác GHI: Đồng ý → gọi execute, Hủy → bỏ
     function renderConfirm(j) {
         bubble(`Tôi sắp làm việc này:<br>• ${md(j.summary)}<br><br>`
             + `<button class="ai-btn ai-btn-p" data-ok="1" style="padding:7px 16px;">Đồng ý</button> `
-            + `<button class="ai-btn ai-btn-g" data-no="1" style="padding:7px 16px;">Hủy</button>`, false);
+            + `<button class="ai-btn ai-btn-g" data-no="1" style="padding:7px 16px;">Hủy</button>`, false, false);
         const box = msgs.lastChild;
         box.querySelector('[data-ok]').onclick = async (ev) => {
             const btn = ev.currentTarget;
@@ -183,7 +223,7 @@
             <button type="button" class="ai-btn ai-btn-g" id="ap-add" style="font-size:0.78rem; padding:5px 10px; margin-bottom:8px;">+ Thêm test</button>
             <div style="display:flex; gap:8px;">
                 <button type="button" class="ai-btn ai-btn-g" id="ap-review">Xem trước</button>
-                <button type="button" class="ai-btn ai-btn-p" id="ap-push">Đẩy lên luôn</button>
+                <button type="button" class="ai-btn ai-btn-p" id="ap-push">Thêm bài</button>
             </div>`;
         preview.querySelector('#ap-desc').value = d.description || '';
         preview.querySelector('#ap-sin').value = d.sample_input || '';

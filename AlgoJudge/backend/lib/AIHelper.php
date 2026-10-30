@@ -28,7 +28,7 @@ class AIHelper
         if (!self::hasKey()) {
             throw new Exception('no-key');
         }
-        $model = $cfg['model'] ?? 'gemini-2.0-flash';
+        $model = $cfg['model'] ?? 'gemini-3.8-flash';
         $url = 'https://generativelanguage.googleapis.com/v1beta/models/'
             . urlencode($model) . ':generateContent?key=' . urlencode($cfg['api_key']);
         $ch = curl_init($url);

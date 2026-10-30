@@ -7,6 +7,6 @@ if (!is_string($__aiKey)) $__aiKey = '';
 return [
     'api_key' => trim($__aiKey),
     'provider' => 'gemini', // gemini | openai
-    'model' => 'gemini-2.0-flash',
+    'model' => 'gemini-3.8-flash',
     'timeout' => 60,
 ];
