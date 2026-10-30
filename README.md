@@ -1,8 +1,8 @@
 # AlgoJudge — Hệ thống Luyện tập & Chấm bài Lập trình Trực tuyến
 
-Hệ thống luyện tập và chấm bài tự động với **60 bài tập** (10 bài × 6 ngôn ngữ C / C++ / Java / Python / PHP / JS),
+Hệ thống luyện tập và chấm bài tự động với các bài tập( 6 ngôn ngữ C / C++ / Java / Python / PHP / JS),
 chạy trên **XAMPP + MySQL**, dùng được cả **Windows & Linux**, với
-bộ soạn thảo **Monaco Editor (VS Code Web)**.
+bộ soạn thảo **Monaco Editor **.
 
 ## 1. Kiến trúc:
 
