@@ -4,7 +4,7 @@ Hệ thống luyện tập và chấm bài tự động với **60 bài tập** 
 chạy trên **XAMPP + MySQL**, dùng được cả **Windows & Linux**, với
 bộ soạn thảo **Monaco Editor (VS Code Web)**.
 
-## 1. Kiến trúc: tách BE khỏi FE
+## 1. Kiến trúc:
 
 ```text
 AlgoJudge/
