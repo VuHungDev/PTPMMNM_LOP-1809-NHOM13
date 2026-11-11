@@ -1,0 +1,14 @@
+# Apache 2.4 / XAMPP: private files are never public application routes.
+Options -Indexes -MultiViews
+
+# Includes .env.example and backup variants; filesystem includes remain allowed.
+<FilesMatch "(?i)(^\.env(?:[._-].*)?$|^composer\.(?:json|lock|phar)(?:[._-].*)?$|\.(?:sql(?:\.(?:gz|zip))?|ini|log|bak|old|orig|save|swp|bat|cmd|ps1|phar|phps)$|~$|^shot_tmp\.php$)">
+    Require all denied
+</FilesMatch>
+
+RewriteEngine On
+# Block hidden directories and non-public dependencies/tooling.
+RewriteRule (^|/)\. - [F,L]
+RewriteRule ^vendor(?:/|$) - [F,L,NC]
+RewriteRule ^backend/(?:config|lib|database|tests|worker|sandbox|reference_solutions)(?:/|$) - [F,L,NC]
+RewriteRule ^frontend/partials(?:/|$) - [F,L,NC]

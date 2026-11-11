@@ -4,38 +4,42 @@ require_once __DIR__ . '/../../backend/lib/Auth.php';
 
 $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    csrf_verify();
     $username   = trim($_POST['username'] ?? '');
-    $email      = trim($_POST['email'] ?? '');
+    $email      = strtolower(trim($_POST['email'] ?? ''));
     $fullName   = trim($_POST['full_name'] ?? '');
-    $classCode  = trim($_POST['class_code'] ?? 'CNTT-18-02');
     $password   = $_POST['password'] ?? '';
     $confirmPwd = $_POST['confirm_password'] ?? '';
 
     if ($username === '' || $email === '' || $fullName === '') {
         $error = 'Vui lòng nhập đầy đủ thông tin!';
+    } elseif (!preg_match('/^[a-zA-Z0-9_]{3,50}$/D', $username) || mb_strlen($fullName) > 100) {
+        $error = 'Username cần 3–50 chữ cái, số hoặc dấu gạch dưới; họ tên tối đa 100 ký tự.';
+    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($email) > 100) {
+        $error = 'Email không hợp lệ.';
     } elseif ($password !== $confirmPwd) {
         $error = 'Mật khẩu xác nhận không khớp!';
-    } elseif (strlen($password) < 6) {
-        $error = 'Mật khẩu phải có ít nhất 6 ký tự.';
+    } elseif (strlen($password) < 8 || strlen($password) > 72) {
+        $error = 'Mật khẩu cần từ 8 đến 72 byte.';
     } else {
         $check = $pdo->prepare("SELECT id FROM users WHERE username = ? OR email = ?");
         $check->execute([$username, $email]);
         if ($check->fetch()) {
             $error = 'Username hoặc Email này đã được sử dụng!';
         } else {
-            $hash = password_hash($password, PASSWORD_DEFAULT);
-            $ins = $pdo->prepare("INSERT INTO users (username, email, password_hash, full_name, role, class_code) VALUES (?, ?, ?, ?, 'student', ?)");
-            $ins->execute([$username, $email, $hash, $fullName, $classCode]);
-            $_SESSION['user'] = [
-                'id' => (int)$pdo->lastInsertId(),
-                'username' => $username,
-                'full_name' => $fullName,
-                'role' => 'student',
-                'class_code' => $classCode,
-                'xp_points' => 0,
-            ];
-            header('Location: ' . url('/frontend/index.php'));
-            exit;
+            try {
+                $hash = password_hash($password, PASSWORD_DEFAULT);
+                $ins = $pdo->prepare("INSERT INTO users (username, email, password_hash, full_name, role, class_code) VALUES (?, ?, ?, ?, 'student', '')");
+                $ins->execute([$username, $email, $hash, $fullName]);
+                Auth::login([
+                    'id' => (int)$pdo->lastInsertId(), 'username' => $username,
+                    'full_name' => $fullName, 'role' => 'student', 'auth_version' => 1,
+                ]);
+                header('Location: ' . url('/frontend/index.php'));
+                exit;
+            } catch (PDOException $e) {
+                $error = $e->getCode() === '23000' ? 'Username hoặc email đã được sử dụng.' : 'Không thể đăng ký lúc này. Hãy thử lại.';
+            }
         }
     }
 }
@@ -56,10 +60,11 @@ require FE_DIR . '/partials/layout_head.php';
             <h2 style="margin-bottom:20px;">Đăng ký</h2>
             <?php if ($error): ?><div style="background:#fee2e2; color:#b91c1c; padding:10px 14px; border-radius:8px; margin-bottom:14px;"><?= e($error) ?></div><?php endif; ?>
             <form method="POST">
+                <?= csrf_field() ?>
                 <div class="form-group"><label>Họ tên</label><input type="text" name="full_name" class="form-control" required></div>
                 <div class="form-group"><label>Tên đăng nhập</label><input type="text" name="username" class="form-control" required></div>
                 <div class="form-group"><label>Email</label><input type="email" name="email" class="form-control" required></div>
-                <div class="form-group"><label>Mã lớp</label><input type="text" name="class_code" class="form-control" value="CNTT-18-02" required></div>
+                <p style="font-size:0.88rem; color:var(--cl-muted);">Sau khi đăng ký, bạn có thể nhập mã lớp được giáo viên cung cấp trong mục Lớp học; quyền tham gia cần được giáo viên duyệt.</p>
                 <div class="form-group"><label>Mật khẩu</label><input type="password" name="password" class="form-control" required></div>
                 <div class="form-group"><label>Xác nhận mật khẩu</label><input type="password" name="confirm_password" class="form-control" required></div>
                 <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center;">Đăng ký</button>

@@ -5,9 +5,10 @@ require_once __DIR__ . '/../lib/Auth.php';
 
 $viewer = Auth::requireApiLogin();
 $submissionId = (int)($_GET['submission_id'] ?? 0);
+$classNamesSql = Auth::classNamesSql($viewer, 'u');
 
 $stmt = $pdo->prepare("
-    SELECT s.*, u.id AS owner_id, u.username, u.full_name, u.class_code, pv.version_number
+    SELECT s.*, u.id AS owner_id, u.username, u.full_name, $classNamesSql AS class_names, pv.version_number
     FROM submissions s
     JOIN users u ON u.id = s.user_id
     JOIN problem_versions pv ON pv.id = s.problem_version_id
@@ -22,7 +23,7 @@ if (!$sub) {
     exit;
 }
 
-$owner = ['id' => $sub['owner_id'], 'class_code' => $sub['class_code']];
+$owner = ['id' => $sub['owner_id']];
 if (!Auth::canViewSubmission($viewer, $owner)) {
     http_response_code(403);
     echo json_encode([
@@ -45,15 +46,25 @@ $stmtRuns->execute([$submissionId]);
 $runs = $stmtRuns->fetchAll();
 
 $targetRunId = (int)($_GET['run_id'] ?? $sub['latest_run_id']);
+if (isset($_GET['run_id']) || $targetRunId > 0) {
+    $stmtTarget = $pdo->prepare('SELECT id FROM judging_runs WHERE id = ? AND submission_id = ?');
+    $stmtTarget->execute([$targetRunId, $submissionId]);
+    if (!$stmtTarget->fetchColumn()) {
+        http_response_code(404);
+        echo json_encode(['ok' => false, 'error' => 'Không tìm thấy lần chấm thuộc bài nộp này.']);
+        exit;
+    }
+}
 $stmtCases = $pdo->prepare("
     SELECT cr.verdict, cr.execution_time_ms, cr.actual_output, cr.runtime_error,
            tc.case_order, tc.is_public, tc.is_boundary, tc.stdin_data, tc.expected_output, tc.points
     FROM case_results cr
     JOIN test_cases tc ON tc.id = cr.test_case_id
-    WHERE cr.judging_run_id = ?
+    JOIN judging_runs jr ON jr.id = cr.judging_run_id
+    WHERE cr.judging_run_id = ? AND jr.submission_id = ?
     ORDER BY tc.case_order ASC
 ");
-$stmtCases->execute([$targetRunId]);
+$stmtCases->execute([$targetRunId, $submissionId]);
 $rawCases = $stmtCases->fetchAll();
 
 $safeCases = [];
@@ -77,7 +88,7 @@ echo json_encode([
     'submission' => [
         'id'             => (int)$sub['id'],
         'username'       => $sub['username'],
-        'class_code'     => $sub['class_code'],
+        'class_names'    => $sub['class_names'] ?? '',
         'language'       => $sub['language'],
         'source_code'    => $sub['source_code'],
         'version_number' => (int)$sub['version_number'],

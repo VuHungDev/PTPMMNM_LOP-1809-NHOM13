@@ -12,13 +12,18 @@ $perPage = 15;
 
 $where = [];
 $params = [];
+if ($user['role'] === 'teacher') {
+    $where[] = Auth::teacherStudentScope('u');
+    $params[] = (int)$user['id'];
+}
+$classNamesSql = Auth::classNamesSql($user, 'u');
 if ($fProblem > 0) {
     $where[] = 's.problem_id = ?';
     $params[] = $fProblem;
 }
 $whereSql = $where ? 'WHERE ' . implode(' AND ', $where) : '';
 
-$stmtCnt = $pdo->prepare("SELECT COUNT(*) FROM submissions s $whereSql");
+$stmtCnt = $pdo->prepare("SELECT COUNT(*) FROM submissions s JOIN users u ON u.id = s.user_id $whereSql");
 $stmtCnt->execute($params);
 $totalRows = (int)$stmtCnt->fetchColumn();
 $totalPages = max(1, (int)ceil($totalRows / $perPage));
@@ -26,7 +31,7 @@ $page = min($page, $totalPages);
 $offset = ($page - 1) * $perPage;
 
 $submissions = $pdo->prepare("
-    SELECT s.*, u.username, u.class_code, p.title AS problem_title, p.current_version_id, pv.version_number AS sub_ver_num,
+    SELECT s.*, u.username, $classNamesSql AS class_names, p.title AS problem_title, p.current_version_id, pv.version_number AS sub_ver_num,
            (SELECT GROUP_CONCAT(CONCAT(jr.run_number, '|', jr.trigger_type, '|', jr.verdict, '|', jr.pass_count, '|', jr.total_cases, '|', jr.score, '|', v.version_number) SEPARATOR ';;')
             FROM judging_runs jr JOIN problem_versions v ON v.id = jr.problem_version_id
             WHERE jr.submission_id = s.id ORDER BY jr.run_number ASC) AS runs_blob
@@ -91,7 +96,7 @@ require FE_DIR . '/partials/layout_head.php';
                 ?>
                 <tr style="border-bottom:1px solid var(--cl-border);">
                     <td style="padding:10px; font-weight:700;">#<?= (int)$s['id'] ?></td>
-                    <td style="padding:10px;"><?= e($s['username']) ?><br><small style="color:var(--cl-muted);"><?= e($s['class_code']) ?></small></td>
+                    <td style="padding:10px;"><?= e($s['username']) ?><br><small style="color:var(--cl-muted);"><?= e($s['class_names'] ?: '—') ?></small></td>
                     <td style="padding:10px;"><?= e($s['problem_title']) ?></td>
                     <td style="padding:10px;">
                         <?php foreach ($runs as $r): ?>

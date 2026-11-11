@@ -3,15 +3,35 @@
 require_once __DIR__ . '/../backend/lib/Auth.php';
 $user = Auth::requireLogin();
 
-$fClass = trim($_GET['class_code'] ?? '');
+$fClass = filter_var($_GET['class_id'] ?? '', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+$fClass = $fClass === false ? '' : (string)$fClass;
 $page = max(1, (int)($_GET['page'] ?? 1));
 $perPage = 15;
+if ($user['role'] === 'teacher' && $fClass !== '' && !Auth::teacherOwnsClass((int)$user['id'], (int)$fClass)) {
+    http_response_code(403);
+    die('403 Forbidden — Bạn không quản lý lớp này.');
+}
+
+if ($user['role'] === 'student' && $fClass !== '') {
+    $membership = $pdo->prepare("SELECT 1 FROM class_members WHERE user_id = ? AND class_id = ? AND status = 'active'");
+    $membership->execute([(int)$user['id'], (int)$fClass]);
+    if (!$membership->fetchColumn()) { http_response_code(403); die('Bạn chưa là thành viên của lớp này.'); }
+}
 
 $where = ["u.role = 'student'"];
 $params = [];
-if ($fClass !== '') {
-    $where[] = 'u.class_code = ?';
-    $params[] = $fClass;
+if ($user['role'] === 'teacher') {
+    if ($fClass !== '') {
+        $where[] = 'EXISTS (SELECT 1 FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE cm.user_id = u.id AND cm.class_id = ? AND cm.status = \'active\' AND c.owner_teacher_id = ?)';
+        $params[] = (int)$fClass;
+        $params[] = (int)$user['id'];
+    } else {
+        $where[] = Auth::teacherStudentScope('u');
+        $params[] = (int)$user['id'];
+    }
+} elseif ($fClass !== '') {
+    $where[] = 'EXISTS (SELECT 1 FROM class_members cm WHERE cm.user_id = u.id AND cm.class_id = ? AND cm.status = \'active\')';
+    $params[] = (int)$fClass;
 }
 $whereSql = 'WHERE ' . implode(' AND ', $where);
 
@@ -22,8 +42,10 @@ $totalPages = max(1, (int)ceil($totalRows / $perPage));
 $page = min($page, $totalPages);
 $offset = ($page - 1) * $perPage;
 
+$classNamesSql = Auth::classNamesSql($user);
 $stmt = $pdo->prepare("
-    SELECT u.id, u.username, u.full_name, u.class_code, u.xp_points,
+    SELECT u.id, u.username, u.full_name, u.xp_points,
+           $classNamesSql AS class_names,
            (SELECT COUNT(DISTINCT s.problem_id) FROM submissions s WHERE s.user_id = u.id AND s.final_verdict = 'AC') AS solved,
            (SELECT COUNT(*) FROM submissions s WHERE s.user_id = u.id) AS sub_total
     FROM users u $whereSql
@@ -33,8 +55,17 @@ $stmt = $pdo->prepare("
 $stmt->execute($params);
 $rows = $stmt->fetchAll();
 
-$classes = $pdo->query("SELECT DISTINCT class_code FROM users WHERE role = 'student' ORDER BY class_code ASC")->fetchAll();
-$baseQuery = array_filter(['class_code' => $fClass ?: null]);
+if ($user['role'] === 'admin') {
+    $classes = $pdo->query('SELECT id, name FROM classes ORDER BY name, id')->fetchAll();
+} else {
+    $stmtClasses = $pdo->prepare($user['role'] === 'teacher'
+        ? 'SELECT id, name FROM classes WHERE owner_teacher_id = ? ORDER BY name, id'
+        : "SELECT c.id, c.name FROM classes c JOIN class_members cm ON cm.class_id = c.id WHERE cm.user_id = ? AND cm.status = 'active' ORDER BY c.name, c.id");
+    $stmtClasses->execute([(int)$user['id']]);
+    $classes = $stmtClasses->fetchAll();
+}
+$exportQuery = http_build_query(['type' => 'leaderboard', 'class_id' => $fClass]);
+$baseQuery = array_filter(['class_id' => $fClass ?: null]);
 
 // Hạng của chính người xem (toàn bảng, không lọc)
 $myRank = null;
@@ -55,13 +86,16 @@ require FE_DIR . '/partials/layout_head.php';
             <p style="color:var(--cl-muted);">Giải đúng 1 bài lần đầu: Easy +10 · Medium +20 · Hard +30 XP.
             <?php if ($myRank): ?>Hạng của bạn: <strong>#<?= $myRank ?></strong><?php endif; ?></p>
         </div>
+        <?php if (Auth::isTeacher($user)): ?>
+        <a class="btn btn-success" href="<?= url('/backend/api/export_excel.php?' . $exportQuery) ?>">📥 Xuất Excel</a>
+        <?php endif; ?>
     </div>
 
     <form method="GET" style="display:flex; gap:10px; margin-bottom:16px; background:#fff; padding:14px; border-radius:10px;">
-        <select name="class_code" class="form-control" style="max-width:200px;">
-            <option value="">-- Mọi lớp --</option>
+        <select name="class_id" class="form-control" style="max-width:260px;">
+            <option value="">-- <?= $user['role'] === 'teacher' ? 'Mọi lớp của tôi' : 'Toàn hệ thống' ?> --</option>
             <?php foreach ($classes as $c): ?>
-                <option value="<?= e($c['class_code']) ?>" <?= $fClass === $c['class_code'] ? 'selected' : '' ?>><?= e($c['class_code']) ?></option>
+                <option value="<?= (int)$c['id'] ?>" <?= $fClass === (string)$c['id'] ? 'selected' : '' ?>><?= e($c['name']) ?></option>
             <?php endforeach; ?>
         </select>
         <button type="submit" class="btn btn-primary">Lọc</button>
@@ -84,7 +118,7 @@ require FE_DIR . '/partials/layout_head.php';
                 <tr style="border-bottom:1px solid var(--cl-border); <?= $isMe ? 'background:#eff6ff;' : '' ?>">
                     <td style="padding:12px 16px; font-weight:800; font-size:1.05rem;"><?= $medal ?></td>
                     <td style="padding:12px 16px;"><strong><?= e($r['username']) ?></strong><br><small style="color:var(--cl-muted);"><?= e($r['full_name']) ?></small><?= $isMe ? ' <span class="badge verdict-AC">Bạn</span>' : '' ?></td>
-                    <td style="padding:12px 16px;"><span class="badge" style="background:#f1f5f9;"><?= e($r['class_code']) ?></span></td>
+                    <td style="padding:12px 16px;"><span class="badge" style="background:#f1f5f9;"><?= e($r['class_names'] ?? '—') ?></span></td>
                     <td style="padding:12px 16px; font-weight:800; color:var(--cl-primary);"><?= (int)$r['xp_points'] ?></td>
                     <td style="padding:12px 16px;"><?= (int)$r['solved'] ?></td>
                     <td style="padding:12px 16px;"><?= (int)$r['sub_total'] ?></td>

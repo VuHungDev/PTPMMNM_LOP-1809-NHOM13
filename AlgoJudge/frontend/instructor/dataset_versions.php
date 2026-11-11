@@ -2,25 +2,35 @@
 // frontend/instructor/dataset_versions.php — Tạo phiên bản bộ test mới (teacher/admin)
 // Chấm lại + đối chiếu tách sang rejudge.php; mỗi trang một chức năng.
 require_once __DIR__ . '/../../backend/lib/Auth.php';
+require_once __DIR__ . '/../../backend/lib/AuditLog.php';
 require_once __DIR__ . '/../../backend/lib/JudgeEngine.php';
 
 $user = Auth::requireRole(['teacher', 'admin']);
 $msg = '';
+$msgOk = true;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create_version') {
+    csrf_verify();
     $problemId   = (int)$_POST['problem_id'];
     $timeLimit   = max(100, (int)$_POST['time_limit_ms']);
     $changelog   = trim($_POST['changelog']);
     $extraStdin  = trim($_POST['extra_stdin']);
     $extraExpect = trim($_POST['extra_expected']);
 
-    $stmtCur = $pdo->prepare("SELECT * FROM problem_versions WHERE problem_id = ? ORDER BY version_number DESC LIMIT 1");
-    $stmtCur->execute([$problemId]);
-    $curVer = $stmtCur->fetch();
-
-    if ($curVer) {
-        $newVerNum = (int)$curVer['version_number'] + 1;
+    $ownsTransaction = false;
+    try {
+        if ($pdo->inTransaction()) throw new LogicException('Dataset mutation requires its own transaction.');
         $pdo->beginTransaction();
+        $ownsTransaction = true;
+        // Use the same parent lock as problem-form and AI version creation.
+        $stmtProblem = $pdo->prepare('SELECT id FROM problems WHERE id = ? FOR UPDATE');
+        $stmtProblem->execute([$problemId]);
+        if (!$stmtProblem->fetchColumn()) throw new DomainException('Không tìm thấy bài tập.');
+        $stmtCur = $pdo->prepare('SELECT * FROM problem_versions WHERE problem_id = ? ORDER BY version_number DESC LIMIT 1 FOR UPDATE');
+        $stmtCur->execute([$problemId]);
+        $curVer = $stmtCur->fetch();
+        if (!$curVer) throw new DomainException('Không tìm thấy phiên bản bộ test.');
+        $newVerNum = (int)$curVer['version_number'] + 1;
 
         $stmtNewVer = $pdo->prepare("
             INSERT INTO problem_versions (problem_id, version_number, description, input_desc, output_desc, sample_input, sample_output, time_limit_ms, memory_limit_kb, changelog, created_by)
@@ -48,20 +58,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
         }
 
         $pdo->prepare("UPDATE problems SET current_version_id = ? WHERE id = ?")->execute([$newVerId, $problemId]);
+        AuditLog::record($pdo, $user, 'dataset.create', 'problem', $problemId, ['version_number' => $newVerNum, 'source' => 'ui']);
         $pdo->commit();
+        $ownsTransaction = false;
 
         $msg = "Đã tạo thành công Bộ dữ liệu Phiên bản v{$newVerNum}.0 (ID #{$newVerId})! Các lần chấm trước vẫn được giữ nguyên.";
+    } catch (Throwable $e) {
+        if ($ownsTransaction && $pdo->inTransaction()) $pdo->rollBack();
+        $msg = $e instanceof DomainException ? $e->getMessage() : 'Không thể tạo phiên bản bộ test. Chưa có thay đổi nào được lưu.';
+        $msgOk = false;
     }
 }
 
 $problems = $pdo->query("SELECT p.*, pv.version_number FROM problems p JOIN problem_versions pv ON pv.id = p.current_version_id ORDER BY p.id ASC")->fetchAll();
 
+$page = max(1, (int)($_GET['page'] ?? 1));
+$perPage = 15;
+$totalRows = (int)$pdo->query('SELECT COUNT(*) FROM problem_versions')->fetchColumn();
+$totalPages = max(1, (int)ceil($totalRows / $perPage));
+$page = min($page, $totalPages);
+$offset = ($page - 1) * $perPage;
 $versions = $pdo->query("
     SELECT pv.*, p.title AS problem_title,
            (SELECT COUNT(*) FROM test_cases tc WHERE tc.problem_version_id = pv.id) AS case_count
     FROM problem_versions pv JOIN problems p ON p.id = pv.problem_id
-    ORDER BY pv.problem_id ASC, pv.version_number DESC LIMIT 30
+    ORDER BY pv.problem_id ASC, pv.version_number DESC LIMIT $perPage OFFSET $offset
 ")->fetchAll();
+$baseQuery = [];
 
 $pageTitle = 'Bộ Test & Phiên bản';
 $activeNav = 'data';
@@ -69,8 +92,8 @@ require FE_DIR . '/partials/layout_head.php';
 ?>
 <div style="max-width:1280px; margin:28px auto; padding:0 24px;">
     <?php if ($msg): ?>
-        <div style="background:#dcfce7; color:#15803d; padding:14px 18px; border-radius:8px; margin-bottom:20px; font-weight:600;">
-            ✔ <?= e($msg) ?>
+        <div role="status" style="background:<?= $msgOk ? '#dcfce7; color:#15803d' : '#fee2e2; color:#b91c1c' ?>; padding:14px 18px; border-radius:8px; margin-bottom:20px; font-weight:600;">
+            <?= e($msg) ?>
         </div>
     <?php endif; ?>
 
@@ -82,6 +105,7 @@ require FE_DIR . '/partials/layout_head.php';
                 Muốn chấm lại các bài cũ trên bộ test mới, sang trang <a href="<?= url('/frontend/instructor/rejudge.php') ?>">Chấm lại &amp; đối chiếu</a>.
             </p>
             <form method="POST">
+                <?= csrf_field() ?>
                 <input type="hidden" name="action" value="create_version">
                 <div class="form-group">
                     <label>Chọn bài tập</label>
@@ -112,7 +136,7 @@ require FE_DIR . '/partials/layout_head.php';
         </div>
 
         <div style="background:#fff; padding:24px; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.05);">
-            <h3 style="margin-bottom:12px;">Lịch sử phiên bản bộ test (30 mới nhất)</h3>
+            <h3 style="margin-bottom:12px;">Lịch sử phiên bản bộ test (<?= $totalRows ?> bản)</h3>
             <table style="width:100%; border-collapse:collapse; font-size:0.88rem;">
                 <thead>
                     <tr style="background:#f8fafc; border-bottom:1px solid var(--cl-border); text-align:left;">
@@ -135,6 +159,7 @@ require FE_DIR . '/partials/layout_head.php';
                     <?php endforeach; ?>
                 </tbody>
             </table>
+            <?php require FE_DIR . '/partials/pagination.php'; ?>
         </div>
     </div>
 </div>

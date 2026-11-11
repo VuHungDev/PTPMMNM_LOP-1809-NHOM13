@@ -35,20 +35,21 @@ $sbGroups = [
         'key'    => 'train',
         'label'  => 'Luyện tập',
         'icon'   => 'brand',
-        'active' => ['train', 'rank', 'subs', 'profile', 'play'],
+        'active' => array_merge(['train', 'rank', 'subs', 'profile', 'play'], $sbRole === 'student' ? ['classes'] : []),
         'items'  => [
             ['nav' => 'train',   'href' => '/frontend/index.php',       'label' => 'Danh sách bài tập',  'icon' => 'list'],
             ['nav' => 'play',    'href' => '/frontend/playground.php',  'label' => 'Sân chơi tự do',     'icon' => 'play'],
             ['nav' => 'rank',    'href' => '/frontend/leaderboard.php', 'label' => 'Bảng xếp hạng',      'icon' => 'trophy'],
             ['nav' => 'subs',    'href' => '/frontend/submissions.php', 'label' => 'Lịch sử nộp bài',    'icon' => 'clock'],
-            ['nav' => 'profile', 'href' => '/frontend/profile.php',     'label' => 'Hồ sơ & điểm XP',    'icon' => 'user'],
+            ['nav' => 'profile', 'href' => '/frontend/profile.php',     'label' => $sbRole === 'student' ? 'Hồ sơ & điểm XP' : ($sbRole === 'admin' ? 'Thông tin admin' : 'Hồ sơ cá nhân'),    'icon' => 'user'],
+            ['nav' => 'classes', 'href' => '/frontend/instructor/classes.php', 'label' => 'Lớp học', 'icon' => 'layers', 'roles' => ['student']],
         ],
     ],
     [
         'key'    => 'teach',
         'label'  => 'Quản lý giảng dạy',
         'icon'   => 'teach',
-        'active' => ['probs', 'prob_new', 'prob_ai', 'data', 'rejudge', 'queue', 'prog'],
+        'active' => ['probs', 'prob_new', 'prob_ai', 'data', 'rejudge', 'queue', 'prog', 'classes'],
         'roles'  => ['teacher', 'admin'],
         'items'  => [
             ['nav' => 'probs',    'href' => '/frontend/instructor/problems.php',         'label' => 'Danh sách bài tập',    'icon' => 'layers'],
@@ -58,6 +59,7 @@ $sbGroups = [
             ['nav' => 'rejudge',  'href' => '/frontend/instructor/rejudge.php',        'label' => 'Chấm lại & đối chiếu', 'icon' => 'chart'],
             ['nav' => 'queue',    'href' => '/frontend/instructor/queue.php',            'label' => 'Hàng đợi chấm',        'icon' => 'inbox'],
             ['nav' => 'prog',     'href' => '/frontend/instructor/progress.php',        'label' => 'Tiến độ học viên',     'icon' => 'user'],
+            ['nav' => 'classes',  'href' => '/frontend/instructor/classes.php',         'label' => 'Quản lý lớp',         'icon' => 'layers'],
         ],
     ],
     [
@@ -97,7 +99,7 @@ $sbGroups = [
             </button>
             <div class="sb-sub">
                 <div class="sb-sub-inner">
-                    <?php foreach ($g['items'] as $it): ?>
+                    <?php foreach ($g['items'] as $it): if (isset($it['roles']) && !in_array($sbRole, $it['roles'], true)) continue; ?>
                     <a class="sb-link <?= ($activeNav ?? '') === $it['nav'] ? 'active' : '' ?>"
                        href="<?= url($it['href']) ?>" data-nav="<?= e($it['nav']) ?>" title="<?= e($it['label']) ?>">
                         <span class="sb-dot"></span>
@@ -115,7 +117,7 @@ $sbGroups = [
             <span class="sb-avatar"><?= e(mb_strtoupper(mb_substr($user['full_name'] ?? 'U', 0, 1))) ?></span>
             <span class="sb-label sb-user-text">
                 <strong><?= e($user['full_name']) ?></strong>
-                <small><?= e($user['role']) ?> · Lớp <?= e($user['class_code']) ?></small>
+                <small><?= e(['student' => 'Học viên', 'teacher' => 'Giáo viên', 'admin' => 'Quản trị viên'][$sbRole] ?? $sbRole) ?></small>
             </span>
         </a>
         <a href="<?= url('/frontend/auth/logout.php') ?>" class="sb-item sb-logout" title="Đăng xuất">

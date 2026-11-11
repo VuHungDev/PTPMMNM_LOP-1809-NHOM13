@@ -41,16 +41,16 @@ final class Auth
 
         global $pdo;
         try {
-            $stmt = $pdo->prepare("SELECT id, username, full_name, role, class_code, xp_points, is_active FROM users WHERE id = ? LIMIT 1");
+            $stmt = $pdo->prepare("SELECT id, username, full_name, role, class_code, xp_points, is_active, auth_version FROM users WHERE id = ? LIMIT 1");
             $stmt->execute([(int)$sess['id']]);
             $row = $stmt->fetch();
         } catch (PDOException $e) {
-            // Lỗi DB tạm thời: không đăng xuất oan, giữ nguyên session cũ.
-            return $sess;
+            // Fail closed: cached roles must not bypass locks/revoked sessions during DB errors.
+            return null;
         }
 
         // Tài khoản đã bị xóa khỏi DB, hoặc bị admin khóa → đăng xuất ngay.
-        if (!$row || (int)($row['is_active'] ?? 1) === 0) {
+        if (!$row || (int)$row['is_active'] === 0 || (int)($sess['auth_version'] ?? 0) !== (int)$row['auth_version']) {
             self::logout();
             return null;
         }
@@ -63,8 +63,23 @@ final class Auth
             'role'       => $row['role'],
             'class_code' => $row['class_code'],
             'xp_points'  => (int)$row['xp_points'],
+            'auth_version' => (int)$row['auth_version'],
         ];
         return $_SESSION['user'];
+    }
+
+    public static function login(array $row): void
+    {
+        session_regenerate_id(true);
+        $_SESSION = ['chat_scope' => bin2hex(random_bytes(16)), 'user' => [
+            'id' => (int)$row['id'],
+            'username' => $row['username'],
+            'full_name' => $row['full_name'],
+            'role' => $row['role'],
+            'class_code' => $row['class_code'] ?? '',
+            'xp_points' => (int)($row['xp_points'] ?? 0),
+            'auth_version' => (int)$row['auth_version'],
+        ]];
     }
 
     public static function requireLogin(): array
@@ -123,11 +138,44 @@ final class Auth
         if ((int)$viewer['id'] === (int)$owner['id']) {
             return true;
         }
-        if ($viewer['role'] === 'teacher'
-            && ($viewer['class_code'] === 'ALL' || $viewer['class_code'] === $owner['class_code'])) {
-            return true;
+        if ($viewer['role'] === 'teacher') {
+            global $pdo;
+            $stmt = $pdo->prepare("SELECT 1 FROM class_members cm JOIN classes c ON c.id = cm.class_id JOIN users member ON member.id = cm.user_id WHERE cm.user_id = ? AND member.role = 'student' AND cm.status = 'active' AND c.owner_teacher_id = ? LIMIT 1");
+            $stmt->execute([(int)$owner['id'], (int)$viewer['id']]);
+            return (bool)$stmt->fetchColumn();
         }
         return false;
+    }
+
+    public static function teacherStudentScope(string $userAlias = 'u'): string
+    {
+        if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $userAlias)) {
+            throw new InvalidArgumentException('Invalid SQL alias');
+        }
+        return "({$userAlias}.role = 'student' AND EXISTS (SELECT 1 FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE cm.user_id = {$userAlias}.id AND cm.status = 'active' AND c.owner_teacher_id = ?))";
+    }
+
+    public static function teacherOwnsClass(int $teacherId, int $classId): bool
+    {
+        global $pdo;
+        $stmt = $pdo->prepare('SELECT 1 FROM classes WHERE id = ? AND owner_teacher_id = ? LIMIT 1');
+        $stmt->execute([$classId, $teacherId]);
+        return (bool)$stmt->fetchColumn();
+    }
+
+    // Class labels follow the same visibility as reports; never expose another teacher's classes.
+    public static function classNamesSql(array $viewer, string $alias = 'u'): string
+    {
+        if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $alias)) {
+            throw new InvalidArgumentException('Invalid SQL alias');
+        }
+        $scope = '';
+        if ($viewer['role'] === 'teacher') {
+            $scope = ' AND cn.owner_teacher_id = ' . (int)$viewer['id'];
+        } elseif ($viewer['role'] === 'student') {
+            $scope = " AND EXISTS (SELECT 1 FROM class_members visible_cm WHERE visible_cm.class_id = cn.id AND visible_cm.user_id = " . (int)$viewer['id'] . " AND visible_cm.status = 'active')";
+        }
+        return "(SELECT GROUP_CONCAT(DISTINCT cn.name ORDER BY cn.name SEPARATOR ', ') FROM class_members label_cm JOIN classes cn ON cn.id = label_cm.class_id WHERE label_cm.user_id = {$alias}.id AND label_cm.status = 'active'{$scope})";
     }
 
     public static function isTeacher(array $u): bool

@@ -7,6 +7,7 @@ $sbHasUser = !empty($user);
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
+    <meta name="csrf-token" content="<?= e(csrf_token()) ?>">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= e($pageTitle ?? 'AlgoJudge') ?> — AlgoJudge OJ</title>
     <link rel="icon" type="image/svg+xml" href="<?= url('/frontend/assets/img/logo.svg') ?>">
@@ -20,7 +21,7 @@ $sbHasUser = !empty($user);
             } catch (e) {}
         })();
     </script>
-    <link rel="stylesheet" href="<?= url('/frontend/assets/css/algojudge.css') ?>?v=20261028">
+    <link rel="stylesheet" href="<?= url('/frontend/assets/css/algojudge.css') ?>?v=20261111-2">
     <script id="monaco-loader" src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
     <script id="alpine-cdn" src="<?= url('/frontend/assets/js/vendor/alpine.min.js') ?>" defer></script>
 </head>

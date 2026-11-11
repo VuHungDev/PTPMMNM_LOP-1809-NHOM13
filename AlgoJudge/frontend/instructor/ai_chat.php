@@ -19,14 +19,14 @@ require FE_DIR . '/partials/layout_head.php';
     <div style="display:grid; grid-template-columns:1fr; gap:16px;">
         <!-- Khung chat -->
         <div style="background:#fff; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.05); overflow:hidden;">
-            <div id="ai-msgs" style="padding:18px; min-height:140px; max-height:340px; overflow-y:auto; font-size:0.92rem;">
+            <div id="problem-ai-msgs" style="padding:18px; min-height:140px; max-height:340px; overflow-y:auto; font-size:0.92rem;">
                 <div style="background:#f1f5f9; border-radius:10px; padding:10px 14px; margin-bottom:8px;">
                     Chào thầy/cô! Hãy <b>dán đề bài</b> vào ô bên dưới rồi bấm <b>Gửi</b> — tôi sẽ tách thành tiêu đề, mô tả, ví dụ mẫu và test case để thầy/cô duyệt.
                 </div>
             </div>
             <div style="display:flex; gap:8px; padding:12px; border-top:1px solid var(--cl-border);">
-                <textarea id="ai-input" class="form-control" rows="3" style="flex:1;" placeholder="Dán đề bài vào đây... (VD: Cho hai số a, b. Tính tổng...)"></textarea>
-                <button class="btn btn-primary" id="ai-send" style="align-self:flex-end;">Gửi</button>
+                <textarea id="problem-ai-input" class="form-control" rows="3" style="flex:1;" placeholder="Dán đề bài vào đây... (VD: Cho hai số a, b. Tính tổng...)"></textarea>
+                <button class="btn btn-primary" id="problem-ai-send" style="align-self:flex-end;">Gửi</button>
             </div>
         </div>
 
@@ -70,7 +70,7 @@ require FE_DIR . '/partials/layout_head.php';
                 <button type="button" class="btn" id="ai-add-case" style="background:#e2e8f0; margin:6px 0 12px;">+ Thêm test</button>
                 <div style="display:flex; gap:10px; flex-wrap:wrap;">
                     <button type="button" class="btn" id="ai-to-form" style="background:#e2e8f0;">Chế độ 1: Xem trước trong form tạo</button>
-                    <button type="button" class="btn btn-primary" id="ai-push">Chế độ 2: Đẩy lên luôn</button>
+                    <button type="button" class="btn btn-primary" id="ai-push">Thêm bài</button>
                 </div>
                 <p style="font-size:0.82rem; color:#64748b; margin:8px 0 0;">
                     Chế độ 1 mở form tạo bài với dữ liệu đã điền sẵn để sửa thêm trước khi lưu.
@@ -83,9 +83,9 @@ require FE_DIR . '/partials/layout_head.php';
 
 <script>
 (function () {
-    const msgs = document.getElementById('ai-msgs');
-    const input = document.getElementById('ai-input');
-    const btnSend = document.getElementById('ai-send');
+    const msgs = document.getElementById('problem-ai-msgs');
+    const input = document.getElementById('problem-ai-input');
+    const btnSend = document.getElementById('problem-ai-send');
     const wrap = document.getElementById('ai-preview-wrap');
     const casesEl = document.getElementById('ai-cases');
     const form = document.getElementById('ai-form');
@@ -128,7 +128,7 @@ require FE_DIR . '/partials/layout_head.php';
         casesEl.appendChild(div);
     }
     document.getElementById('ai-add-case').onclick = () => addCaseRow({ is_public: false });
-    document.getElementById('ai-input').addEventListener('keydown', e => {
+    document.getElementById('problem-ai-input').addEventListener('keydown', e => {
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send();
     });
 
@@ -141,7 +141,7 @@ require FE_DIR . '/partials/layout_head.php';
         try {
             const res = await fetch('<?= url('/backend/api/ai_parse_problem.php') ?>', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
                 body: JSON.stringify({ text }),
             });
             const j = await res.json();
@@ -206,7 +206,7 @@ require FE_DIR . '/partials/layout_head.php';
         try {
             const res = await fetch('<?= url('/backend/api/ai_create_problem.php') ?>', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
                 body: JSON.stringify(collect()),
             });
             const j = await res.json();

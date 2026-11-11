@@ -1,2 +1,3 @@
 # Key và môi trường local — không commit
 .env
+/vendor/

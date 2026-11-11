@@ -11,6 +11,7 @@ export async function rejudgeSubmission(subId, verId) {
     try {
         ({ data } = await apiFetch('/rejudge.php', {
             method: 'POST',
+            headers: { 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
             body: { submission_id: subId, problem_version_id: verId },
         }));
     } catch (err) {
@@ -31,6 +32,7 @@ export async function retryRun(runId) {
     try {
         ({ data } = await apiFetch('/retry_run.php', {
             method: 'POST',
+            headers: { 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
             body: { run_id: runId },
         }));
     } catch (err) {

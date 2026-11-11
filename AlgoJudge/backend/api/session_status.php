@@ -13,11 +13,9 @@ if (!$u) {
 echo json_encode([
     'ok' => true,
     'valid' => true,
-    'user' => [
+    'user' => array_merge([
         'id' => $u['id'],
         'username' => $u['username'],
         'role' => $u['role'],
-        'class_code' => $u['class_code'],
-        'xp_points' => $u['xp_points'],
-    ],
+    ], $u['role'] === 'student' ? ['xp_points' => $u['xp_points']] : []),
 ]);

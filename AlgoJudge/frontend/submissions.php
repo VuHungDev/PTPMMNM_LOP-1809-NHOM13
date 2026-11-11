@@ -5,7 +5,8 @@ $viewer = Auth::requireLogin();
 
 $fProblem = (int)($_GET['problem_id'] ?? 0);
 $fVerdict = $_GET['verdict'] ?? '';
-$fClass = trim($_GET['class_code'] ?? '');
+$fClass = filter_var($_GET['class_id'] ?? '', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+$fClass = $fClass === false ? '' : (string)$fClass;
 $fUser = trim($_GET['username'] ?? '');
 $page = max(1, (int)($_GET['page'] ?? 1));
 $perPage = 15;
@@ -23,13 +24,17 @@ if ($viewer['role'] === 'student') {
     $where[] = 's.user_id = ?';
     $params[] = $viewer['id'];
 } elseif ($viewer['role'] === 'teacher') {
-    if ($viewer['class_code'] !== 'ALL') {
-        $where[] = 'u.class_code = ?';
-        $params[] = $viewer['class_code'];
+    if ($fClass !== '') {
+        if (!Auth::teacherOwnsClass((int)$viewer['id'], (int)$fClass)) { http_response_code(403); die('Bạn không quản lý lớp này.'); }
+        $where[] = "u.role = 'student' AND EXISTS (SELECT 1 FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE cm.user_id = u.id AND cm.class_id = ? AND cm.status = 'active' AND c.owner_teacher_id = " . (int)$viewer['id'] . ')';
+        $params[] = (int)$fClass;
+    } else {
+        $where[] = Auth::teacherStudentScope('u');
+        $params[] = (int)$viewer['id'];
     }
 } elseif ($fClass !== '') {
-    $where[] = 'u.class_code = ?';
-    $params[] = $fClass;
+    $where[] = 'EXISTS (SELECT 1 FROM class_members cm WHERE cm.user_id = u.id AND cm.class_id = ? AND cm.status = \'active\')';
+    $params[] = (int)$fClass;
 }
 if ($fProblem > 0) {
     $where[] = 's.problem_id = ?';
@@ -57,8 +62,10 @@ $totalPages = max(1, (int)ceil($totalRows / $perPage));
 $page = min($page, $totalPages);
 $offset = ($page - 1) * $perPage;
 
+$classNamesSql = Auth::classNamesSql($viewer);
 $stmt = $pdo->prepare("
-    SELECT s.*, u.id AS owner_id, u.username, u.full_name, u.class_code,
+    SELECT s.*, u.id AS owner_id, u.username, u.full_name,
+           $classNamesSql AS class_names,
            p.title AS problem_title, pv.version_number
     FROM submissions s
     JOIN users u ON u.id = s.user_id
@@ -71,15 +78,19 @@ $stmt->execute($params);
 $list = $stmt->fetchAll();
 
 $problems = $pdo->query("SELECT id, title FROM problems WHERE is_active = 1 ORDER BY id ASC")->fetchAll();
-$classes = $pdo->query("SELECT DISTINCT class_code FROM users ORDER BY class_code ASC")->fetchAll();
+$classes = in_array($viewer['role'], ['teacher', 'admin'], true)
+    ? ($viewer['role'] === 'admin'
+        ? $pdo->query('SELECT id, name FROM classes ORDER BY name')->fetchAll()
+        : (function () use ($pdo, $viewer) { $stmt = $pdo->prepare('SELECT id, name FROM classes WHERE owner_teacher_id = ? ORDER BY name'); $stmt->execute([(int)$viewer['id']]); return $stmt->fetchAll(); })())
+    : [];
 
-$exportQuery = http_build_query(array_filter([
-    'type' => 'submissions',
+$baseQuery = array_filter([
     'problem_id' => $fProblem ?: null,
-    'verdict' => $fVerdict ?: null,
-    'class_code' => $fClass ?: null,
-]));
-$baseQuery = array_filter(['problem_id' => $fProblem ?: null, 'verdict' => $fVerdict ?: null, 'class_code' => $fClass ?: null, 'username' => $fUser ?: null]);
+    'verdict' => $fVerdict,
+    'class_id' => $fClass,
+    'username' => $fUser,
+], static fn($value) => $value !== null && $value !== '');
+$exportQuery = http_build_query(['type' => 'submissions'] + $baseQuery);
 
 $pageTitle = 'Lịch sử bài nộp';
 $activeNav = 'subs';
@@ -89,9 +100,13 @@ require FE_DIR . '/partials/layout_head.php';
 <div style="max-width:1280px; margin:28px auto; padding:0 24px;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
         <div>
-            <h2 style="margin-bottom:6px;">Tra cứu Lịch sử Bài nộp (<?= $totalRows ?> bản)</h2>
+            <h2 style="margin-bottom:6px;"><?= $viewer['role'] === 'teacher' ? 'Lịch sử nộp bài — Lớp tôi quản lý' : 'Tra cứu Lịch sử Bài nộp' ?> (<?= $totalRows ?> bản)</h2>
             <p style="color:var(--cl-muted);">
-                Bạn đang đăng nhập: <strong><?= e($viewer['username']) ?></strong> (<?= e($viewer['role']) ?> — Lớp <?= e($viewer['class_code']) ?>).
+                <?php if ($viewer['role'] === 'teacher'): ?>
+                    Chỉ hiển thị bài nộp của học viên đang là thành viên các lớp bạn trực tiếp quản lý. Bộ lọc và xuất Excel cũng chỉ áp dụng trong phạm vi này.
+                <?php else: ?>
+                    Bạn đang đăng nhập: <strong><?= e($viewer['username']) ?></strong> (<?= e($viewer['role']) ?>).
+                <?php endif; ?>
             </p>
         </div>
         <a class="btn btn-success" href="<?= url('/backend/api/export_excel.php?' . $exportQuery) ?>">📥 Xuất Excel (lọc hiện tại)</a>
@@ -110,11 +125,11 @@ require FE_DIR . '/partials/layout_head.php';
                 <option value="<?= $v ?>" <?= $fVerdict === $v ? 'selected' : '' ?>><?= $v ?></option>
             <?php endforeach; ?>
         </select>
-        <?php if ($viewer['role'] === 'admin'): ?>
-        <select name="class_code" class="form-control" style="max-width:160px;">
-            <option value="">-- Mọi lớp --</option>
+        <?php if (in_array($viewer['role'], ['teacher', 'admin'], true)): ?>
+        <select name="class_id" class="form-control" style="max-width:220px;">
+            <option value="">-- <?= $viewer['role'] === 'admin' ? 'Mọi lớp' : 'Mọi lớp của tôi' ?> --</option>
             <?php foreach ($classes as $c): ?>
-                <option value="<?= e($c['class_code']) ?>" <?= $fClass === $c['class_code'] ? 'selected' : '' ?>><?= e($c['class_code']) ?></option>
+                <option value="<?= (int)$c['id'] ?>" <?= $fClass === (string)$c['id'] ? 'selected' : '' ?>><?= e($c['name']) ?></option>
             <?php endforeach; ?>
         </select>
         <?php endif; ?>
@@ -139,12 +154,12 @@ require FE_DIR . '/partials/layout_head.php';
             </thead>
             <tbody>
                 <?php foreach ($list as $row):
-                    $allowed = Auth::canViewSubmission($viewer, ['id' => $row['owner_id'], 'class_code' => $row['class_code']]);
+                    $allowed = Auth::canViewSubmission($viewer, ['id' => $row['owner_id']]);
                 ?>
                 <tr style="border-bottom:1px solid var(--cl-border);">
                     <td style="padding:12px 16px; font-weight:700;">#<?= (int)$row['id'] ?></td>
                     <td style="padding:12px 16px;"><?= e($row['full_name']) ?> (<code><?= e($row['username']) ?></code>)</td>
-                    <td style="padding:12px 16px;"><span class="badge" style="background:#f1f5f9;"><?= e($row['class_code']) ?></span></td>
+                    <td style="padding:12px 16px;"><span class="badge" style="background:#f1f5f9;"><?= e($row['class_names'] ?? '—') ?></span></td>
                     <td style="padding:12px 16px; font-weight:600;"><?= e($row['problem_title']) ?></td>
                     <td style="padding:12px 16px;"><code><?= e($row['language']) ?></code> • v<?= (int)$row['version_number'] ?>.0</td>
                     <td style="padding:12px 16px;"><span class="badge verdict-<?= e($row['final_verdict']) ?>"><?= e($row['final_verdict']) ?></span></td>

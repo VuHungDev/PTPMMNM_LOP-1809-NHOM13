@@ -5,26 +5,50 @@ require_once __DIR__ . '/../../backend/lib/Auth.php';
 $user = Auth::requireRole(['teacher', 'admin']);
 
 $stuckMinutes = 5;
-$runs = $pdo->query("
-    SELECT jr.*, s.language, u.username, u.class_code, p.title AS problem_title, pv.version_number,
+$page = max(1, (int)($_GET['page'] ?? 1));
+$perPage = 20;
+$scopeSql = '1=1';
+$queueParams = [];
+if ($user['role'] === 'teacher') {
+    $scopeSql = Auth::teacherStudentScope('u');
+    $queueParams[] = (int)$user['id'];
+}
+$queueWhere = "WHERE jr.status IN ('QUEUED', 'RUNNING', 'SYS_ERROR') AND $scopeSql";
+$classNamesSql = Auth::classNamesSql($user, 'u');
+$stmtCount = $pdo->prepare("SELECT COUNT(*) FROM judging_runs jr JOIN submissions s ON s.id = jr.submission_id JOIN users u ON u.id = s.user_id $queueWhere");
+$stmtCount->execute($queueParams);
+$totalRows = (int)$stmtCount->fetchColumn();
+$totalPages = max(1, (int)ceil($totalRows / $perPage));
+$page = min($page, $totalPages);
+$offset = ($page - 1) * $perPage;
+$runsStmt = $pdo->prepare("
+    SELECT jr.*, s.language, u.username, $classNamesSql AS class_names, p.title AS problem_title, pv.version_number,
            TIMESTAMPDIFF(MINUTE, jr.created_at, NOW()) AS age_min
     FROM judging_runs jr
     JOIN submissions s ON s.id = jr.submission_id
     JOIN users u ON u.id = s.user_id
     JOIN problems p ON p.id = s.problem_id
     JOIN problem_versions pv ON pv.id = jr.problem_version_id
-    WHERE jr.status IN ('QUEUED', 'RUNNING', 'SYS_ERROR')
-    ORDER BY jr.id DESC LIMIT 30
-")->fetchAll();
+    $queueWhere
+    ORDER BY jr.id DESC LIMIT $perPage OFFSET $offset
+");
+$runsStmt->execute($queueParams);
+$runs = $runsStmt->fetchAll();
+$baseQuery = [];
 
-$stats = $pdo->query("
+$statsStmt = $pdo->prepare("
     SELECT
-      SUM(status = 'QUEUED') AS queued,
-      SUM(status = 'RUNNING') AS running,
-      SUM(status = 'SYS_ERROR') AS syserr,
-      SUM(status = 'COMPLETED') AS completed
-    FROM judging_runs
-")->fetch();
+      SUM(jr.status = 'QUEUED') AS queued,
+      SUM(jr.status = 'RUNNING') AS running,
+      SUM(jr.status = 'SYS_ERROR') AS syserr,
+      SUM(jr.status = 'COMPLETED') AS completed
+    FROM judging_runs jr
+    JOIN submissions s ON s.id = jr.submission_id
+    JOIN users u ON u.id = s.user_id
+    WHERE $scopeSql
+");
+$statsStmt->execute($queueParams);
+$stats = $statsStmt->fetch();
 
 $pageTitle = 'Hàng đợi chấm';
 $activeNav = 'queue';
@@ -70,7 +94,7 @@ require FE_DIR . '/partials/layout_head.php';
                 <tr style="border-bottom:1px solid var(--cl-border); <?= $stuck ? 'background:#fffbeb;' : '' ?>">
                     <td style="padding:10px; font-weight:700;">#<?= (int)$r['id'] ?> <small style="color:var(--cl-muted);">(lần <?= (int)$r['run_number'] ?>)</small></td>
                     <td style="padding:10px;">#<?= (int)$r['submission_id'] ?> <code><?= e($r['language']) ?></code></td>
-                    <td style="padding:10px;"><?= e($r['username']) ?><br><small style="color:var(--cl-muted);"><?= e($r['class_code']) ?></small></td>
+                    <td style="padding:10px;"><?= e($r['username']) ?><br><small style="color:var(--cl-muted);"><?= e($r['class_names'] ?: '—') ?></small></td>
                     <td style="padding:10px;"><?= e($r['problem_title']) ?><br><small style="color:var(--cl-muted);">test v<?= (int)$r['version_number'] ?>.0</small></td>
                     <td style="padding:10px;"><code><?= e($r['trigger_type']) ?></code><br><span class="badge verdict-<?= e($r['verdict']) ?>"><?= e($r['status']) ?></span></td>
                     <td style="padding:10px;"><?= (int)$r['age_min'] ?> phút<?= $stuck ? '<br><span class="badge verdict-TLE">KẸT?</span>' : '' ?></td>
@@ -84,6 +108,7 @@ require FE_DIR . '/partials/layout_head.php';
                 <?php endif; ?>
             </tbody>
         </table>
+        <?php require FE_DIR . '/partials/pagination.php'; ?>
     </div>
     <p style="color:var(--cl-muted); font-size:0.85rem; margin-top:12px;">
         Run kẹt (QUEUED/RUNNING quá <?= $stuckMinutes ?> phút, thường do worker dừng đột ngột) cũng được thử lại bằng cùng nút — hệ thống tạo lượt chấm mới (SYS_RETRY) thay vì chấm đè.

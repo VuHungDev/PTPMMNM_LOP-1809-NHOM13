@@ -1,6 +1,7 @@
 <?php
 // backend/lib/AIAssistant.php — Bộ não chatbot full-app: định tuyến ý định + tra cứu số liệu + thao tác có xác nhận.
 // Nguyên tắc: đọc thoải mái; mọi thao tác GHI đều phải qua confirm_token (2 bước).
+require_once __DIR__ . '/AuditLog.php';
 
 class AIAssistant
 {
@@ -60,7 +61,7 @@ class AIAssistant
         if (preg_match('/thử\s*lại/u', $t) && preg_match('/run|chấm|lần/u', $t)) {
             return self::needConfirm('retry_run', self::extractRunRef($text), $user);
         }
-        if (preg_match('/xuất|bao cao|báo cáo|excel|thống kê|thong ke/u', $t)) {
+        if (preg_match('/xuất|bao cao|báo cáo|excel/u', $t)) {
             return self::needConfirm('export_progress', self::extractClassRef($text), $user);
         }
 
@@ -78,17 +79,22 @@ class AIAssistant
     {
         global $pdo;
         $t = mb_strtolower($text);
-        $isTeacher = in_array($user['role'], ['teacher', 'admin'], true);
-        if (!$isTeacher) return null;
-        $scope = ($user['role'] === 'teacher' && $user['class_code'] !== 'ALL')
-            ? " AND u.class_code = " . $pdo->quote($user['class_code']) : '';
+        if (!in_array($user['role'], ['teacher', 'admin'], true)) return null;
+        $scope = '1=1';
+        $scopeParams = [];
+        if ($user['role'] === 'teacher') {
+            $scope = Auth::teacherStudentScope('u');
+            $scopeParams[] = (int)$user['id'];
+        }
+        $scopeLabel = $user['role'] === 'teacher' ? ' trong các lớp bạn quản lý' : ' trong hệ thống';
 
-        // Bao nhiêu học viên / bài tập / bài nộp...
-        if (preg_match('/(bao nhiêu|mấy|thống kê|tổng|tong).*(học viên|hoc vien|học sinh|user|tài khoản)/u', $t)
+        // EXISTS giữ mỗi học viên/bài nộp đúng một lần khi có nhiều lớp.
+        if (preg_match('/(bao nhiêu|mấy|thống kê|thong ke|tổng|tong).*(học viên|hoc vien|học sinh|user|tài khoản)/u', $t)
             || preg_match('/(học viên|hoc vien).*(bao nhiêu|mấy|danh sách|liệt kê)/u', $t)) {
-            $n = (int)$pdo->query("SELECT COUNT(*) FROM users u WHERE u.role = 'student'$scope")->fetchColumn();
-            $cls = $user['role'] === 'teacher' && $user['class_code'] !== 'ALL' ? " lớp {$user['class_code']}" : '';
-            return ['kind' => 'stats', 'answer' => "Hiện có **$n học viên**$cls."];
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM users u WHERE u.role = 'student' AND $scope");
+            $stmt->execute($scopeParams);
+            $n = (int)$stmt->fetchColumn();
+            return ['kind' => 'stats', 'answer' => "Hiện có **$n học viên**$scopeLabel."];
         }
         if (preg_match('/(bao nhiêu|mấy|tổng).*(bài tập|bai tap|bài|problem)/u', $t)
             || preg_match('/(bài tập|bài).*(bao nhiêu|mấy|danh sách)/u', $t)) {
@@ -96,19 +102,24 @@ class AIAssistant
             return ['kind' => 'stats', 'answer' => "Hiện có **$n bài tập** đang hiển thị. Xem chi tiết tại trang Danh sách bài tập."];
         }
         if (preg_match('/(hàng đợi|hang doi|queue|đang chấm|dang cham|chờ chấm|cho cham)/u', $t)) {
-            $q = (int)$pdo->query("SELECT COUNT(*) FROM judging_runs WHERE status IN ('QUEUED','RUNNING')")->fetchColumn();
-            $msg = $q > 0 ? "Hàng đợi chấm hiện có **$q lượt** đang chờ/xử lý." : "Hàng đợi chấm đang trống — mọi bài đã chấm xong.";
-            return ['kind' => 'stats', 'answer' => $msg];
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM judging_runs jr JOIN submissions s ON s.id = jr.submission_id JOIN users u ON u.id = s.user_id WHERE jr.status IN ('QUEUED','RUNNING') AND $scope");
+            $stmt->execute($scopeParams);
+            $q = (int)$stmt->fetchColumn();
+            return ['kind' => 'stats', 'answer' => "Hàng đợi chấm$scopeLabel hiện có **$q lượt** đang chờ/xử lý."];
         }
         if (preg_match('/(bài.*(sai|khó|rớt|rot|wa nhiều)|wa nhiều|khó nhất|ty le|tỉ lệ)/u', $t)) {
-            $rows = $pdo->query("
+            $stmt = $pdo->prepare("
                 SELECT p.id, p.title,
                        SUM(s.final_verdict = 'AC') AS ac, COUNT(*) AS total
                 FROM submissions s JOIN problems p ON p.id = s.problem_id
+                JOIN users u ON u.id = s.user_id
+                WHERE $scope
                 GROUP BY p.id HAVING total >= 3 ORDER BY ac / total ASC LIMIT 5
-            ")->fetchAll();
-            if (!$rows) return ['kind' => 'stats', 'answer' => 'Chưa đủ dữ liệu nộp bài để đánh giá bài khó nhất.'];
-            $out = "Top bài tỉ lệ AC thấp nhất:\n";
+            ");
+            $stmt->execute($scopeParams);
+            $rows = $stmt->fetchAll();
+            if (!$rows) return ['kind' => 'stats', 'answer' => 'Chưa đủ dữ liệu nộp bài trong phạm vi được phép để đánh giá bài khó nhất.'];
+            $out = "Top bài tỉ lệ AC thấp nhất$scopeLabel:\n";
             foreach ($rows as $r) {
                 $rate = $r['total'] ? round($r['ac'] / $r['total'] * 100, 1) : 0;
                 $out .= "- #{$r['id']} {$r['title']}: {$rate}% AC ({$r['ac']}/{$r['total']})\n";
@@ -117,15 +128,16 @@ class AIAssistant
         }
         if (preg_match('/(tiến độ|tien do|điểm|diem|kết quả|ket qua).*(lớp|lop|class)/u', $t)
             || preg_match('/(lớp|lop).*(tiến độ|điểm|thế nào|ra sao)/u', $t)) {
-            $rows = $pdo->query("
-                SELECT COUNT(*) AS n,
-                       SUM(s.final_verdict = 'AC') AS ac, COUNT(*) AS total
-                FROM submissions s JOIN users u ON u.id = s.user_id WHERE 1=1$scope
-            ")->fetch();
+            $stmt = $pdo->prepare("
+                SELECT SUM(s.final_verdict = 'AC') AS ac, COUNT(*) AS total
+                FROM submissions s JOIN users u ON u.id = s.user_id WHERE $scope
+            ");
+            $stmt->execute($scopeParams);
+            $rows = $stmt->fetch();
             $total = (int)($rows['total'] ?? 0);
             $ac = (int)($rows['ac'] ?? 0);
             $rate = $total ? round($ac / $total * 100, 1) : 0;
-            return ['kind' => 'stats', 'answer' => "Lớp: $total lượt nộp, $ac lượt AC (**$rate%**). Muốn chi tiết từng bạn, bấm Xuất báo cáo hoặc vào trang Tiến độ học viên."];
+            return ['kind' => 'stats', 'answer' => "Tiến độ$scopeLabel: $total lượt nộp, $ac lượt AC (**$rate%**). Muốn chi tiết từng bạn, bấm Xuất báo cáo hoặc vào trang Tiến độ học viên."];
         }
         return null;
     }
@@ -139,7 +151,8 @@ class AIAssistant
         if (preg_match('/username\s*(là\s+)?([a-zA-Z0-9_]{3,50})/i', $text, $m)) $f['username'] = $m[2];
         if (preg_match('/[\w.+-]+@[\w-]+\.[\w.]+/', $text, $m)) $f['email'] = $m[0];
         if (preg_match('/giáo viên|giao vien|teacher/u', mb_strtolower($text))) $f['role'] = 'teacher';
-        if (preg_match('/lớp\s+([A-Za-z0-9-]+)/iu', $text, $m)) $f['class_code'] = strtoupper($m[1]);
+        // Không gán membership từ tên/mã lớp tự do khi tạo tài khoản.
+        if (preg_match('/(?<![\pL\pN_])(?:lớp|lop|class(?:_code|_id)?)(?:\s*[:=#]\s*|\s+)([^,\n]+)/iu', $text, $m)) $f['class_code'] = trim($m[1]);
         return $f;
     }
 
@@ -179,8 +192,13 @@ class AIAssistant
 
     private static function extractClassRef(string $text): array
     {
-        $f = ['class_code' => ''];
-        if (preg_match('/lớp\s+([A-Za-z0-9-]+)/iu', $text, $m)) $f['class_code'] = strtoupper($m[1]);
+        $f = ['class_id' => 0];
+        if (preg_match('/(?<![\pL\pN_])(?:class_id|(?:lớp|lop|class)(?:\s+id)?)(?:\s*[:=#]\s*|\s+)([1-9]\d*)(?![\pL\pN_.-])/iu', $text, $m)) {
+            $f['class_id'] = (int)$m[1];
+        } elseif (preg_match('/(?<![\pL\pN_])(?:lớp|lop|class(?:_code|_id)?)(?:\s*[:=#]\s*|\s+)(\S.*)$/iu', $text, $m)
+            && !preg_match('/^(?:tôi|toi|mình|minh|của\s+(?:tôi|mình)|cua\s+toi)(?:\s|[.!?]|$)/iu', trim($m[1]))) {
+            $f['class_ref'] = trim($m[1]);
+        }
         return $f;
     }
 
@@ -207,11 +225,18 @@ class AIAssistant
     /** Kiểm tra tham số đủ chưa; trả '' nếu đủ, ngược lại trả câu hỏi bổ sung. */
     public static function validateParams(string $action, array $params, array $user): string
     {
+        if (!isset(self::ACTIONS[$action])) return 'Thao tác không được phép.';
+        if (!in_array($user['role'], ['teacher', 'admin'], true)) return 'Chức năng này dành cho giảng viên và quản trị viên.';
         switch ($action) {
             case 'create_user':
-                if (empty($params['full_name'])) return 'Cho tôi biết **họ tên** của tài khoản mới nhé. (VD: tạo tài khoản Nguyễn Văn A, username avan, email a@x.vn, lớp 10A1)';
-                if (empty($params['username'])) return 'Cho tôi biết **username** (chữ/số/gạch dưới, 3–50 ký tự) nhé.';
+                if ($user['role'] !== 'admin') return 'Chỉ admin được tạo tài khoản.';
+                if (trim((string)($params['class_code'] ?? '')) !== '' || !empty($params['class_id'])) {
+                    return 'Không gán lớp bằng tên/mã tự do khi tạo tài khoản. Hãy tạo tài khoản không kèm lớp, sau đó thêm học viên tại [Quản lý lớp](' . url('/frontend/instructor/classes.php') . ').';
+                }
+                if (empty($params['full_name'])) return 'Cho tôi biết **họ tên** của tài khoản mới nhé. (VD: tạo tài khoản tên Nguyễn Văn A, username avan, email a@x.vn)';
+                if (!preg_match('/^[a-zA-Z0-9_]{3,50}$/', (string)($params['username'] ?? ''))) return 'Cho tôi biết **username** (chữ/số/gạch dưới, 3–50 ký tự) nhé.';
                 if (empty($params['email']) || !filter_var($params['email'], FILTER_VALIDATE_EMAIL)) return 'Cho tôi biết **email** hợp lệ nhé.';
+                if (!in_array($params['role'] ?? '', ['student', 'teacher'], true)) return 'Chỉ tạo tài khoản học viên hoặc giáo viên qua trợ lý.';
                 return '';
             case 'add_test_case':
                 if (empty($params['ref'])) return 'Thêm test cho **bài nào**? (VD: thêm test cho bài #3, input: 1 2, output: 3)';
@@ -227,7 +252,19 @@ class AIAssistant
                 if (empty($params['run_id'])) return 'Thử lại **lần chấm (run) nào**? Cho tôi ID run nhé.';
                 return '';
             case 'export_progress':
-                return ''; // lớp để trống = phạm vi của mình
+                if (trim((string)($params['class_code'] ?? '')) !== '' || trim((string)($params['class_ref'] ?? '')) !== '') {
+                    return 'Báo cáo dùng **ID lớp**, không dùng mã lớp cũ. Xem ID tại [Quản lý lớp](' . url('/frontend/instructor/classes.php') . ') rồi yêu cầu, ví dụ: xuất báo cáo lớp #12.';
+                }
+                $classId = filter_var($params['class_id'] ?? 0, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+                if ($classId === false) return 'ID lớp không hợp lệ.';
+                if ($classId > 0) {
+                    if ($user['role'] === 'teacher' && !Auth::teacherOwnsClass((int)$user['id'], $classId)) return 'Bạn không quản lý lớp này.';
+                    global $pdo;
+                    $stmt = $pdo->prepare('SELECT id FROM classes WHERE id = ?');
+                    $stmt->execute([$classId]);
+                    if (!$stmt->fetchColumn()) return 'Không tìm thấy lớp này.';
+                }
+                return ''; // Không chọn lớp: endpoint giới hạn theo vai trò/membership.
         }
         return '';
     }
@@ -237,8 +274,7 @@ class AIAssistant
         switch ($action) {
             case 'create_user':
                 $role = $params['role'] === 'teacher' ? 'giáo viên' : 'học viên';
-                $cls = $params['class_code'] !== '' ? $params['class_code'] : '(theo lớp của bạn)';
-                return "Tạo tài khoản **{$params['full_name']}** (@{$params['username']}, {$params['email']}, vai trò $role, lớp $cls, mật khẩu mặc định 123456).";
+                return "Tạo tài khoản **{$params['full_name']}** (@{$params['username']}, {$params['email']}, vai trò $role, chưa tham gia lớp, mật khẩu khởi tạo ngẫu nhiên). Thêm học viên vào lớp qua trang Quản lý lớp sau khi tạo.";
             case 'add_test_case':
                 $pub = !empty($params['is_public']) ? 'công khai' : 'kín';
                 return "Thêm test case ($pub) cho bài **{$params['ref']}**: input `{$params['stdin']}` → output `{$params['expected']}` (tạo phiên bản đề mới).";
@@ -249,7 +285,8 @@ class AIAssistant
             case 'retry_run':
                 return "Thử lại lần chấm (run) **#{$params['run_id']}** (chỉ được với run lỗi/kẹt).";
             case 'export_progress':
-                $cls = $params['class_code'] !== '' ? " lớp {$params['class_code']}" : '';
+                $classId = (int)($params['class_id'] ?? 0);
+                $cls = $classId > 0 ? " lớp #$classId" : ' trong phạm vi được phép';
                 return "Xuất báo cáo tiến độ$cls ra file Excel.";
         }
         return $action;
@@ -275,91 +312,147 @@ class AIAssistant
         $missing = self::validateParams($action, $params, $user);
         if ($missing !== '') throw new Exception($missing);
 
-        switch ($action) {
-            case 'create_user': {
-                if ($user['role'] !== 'admin') throw new Exception('Chỉ admin được tạo tài khoản.');
-                $chk = $pdo->prepare("SELECT id FROM users WHERE username = ? OR email = ?");
-                $chk->execute([$params['username'], $params['email']]);
-                if ($chk->fetch()) throw new Exception('Username hoặc email đã tồn tại.');
-                $cls = $params['class_code'] !== '' ? $params['class_code']
-                    : ($user['class_code'] !== 'ALL' ? $user['class_code'] : 'CNTT-18-02');
-                $hash = password_hash('123456', PASSWORD_DEFAULT);
-                $pdo->prepare("INSERT INTO users (username, email, password_hash, full_name, role, class_code) VALUES (?, ?, ?, ?, ?, ?)")
-                    ->execute([$params['username'], $params['email'], $hash, $params['full_name'], $params['role'], $cls]);
-                return ['ok' => true, 'answer' => "Đã tạo tài khoản **{$params['full_name']}** (@{$params['username']}) — mật khẩu mặc định 123456."];
-            }
-            case 'add_test_case': {
-                $pr = self::findProblem($params['ref']);
-                if (!$pr) throw new Exception("Không tìm thấy bài '{$params['ref']}'.");
-                $pdo->beginTransaction();
-                try {
-                    $verNum = (int)$pdo->query("SELECT COALESCE(MAX(version_number),0)+1 FROM problem_versions WHERE problem_id = {$pr['id']}")->fetchColumn();
-                    $pdo->prepare("INSERT INTO problem_versions (problem_id, version_number, description, input_desc, output_desc, sample_input, sample_output, time_limit_ms, changelog, created_by) SELECT ?, ?, description, input_desc, output_desc, sample_input, sample_output, time_limit_ms, 'AI chatbot: thêm test case', ? FROM problem_versions WHERE id = ?")
-                        ->execute([$pr['id'], $verNum, $user['id'], $pr['current_version_id']]);
+        if ($action === 'export_progress') {
+            $classId = (int)($params['class_id'] ?? 0);
+            $q = http_build_query(array_filter(['type' => 'progress', 'class_id' => $classId ?: null]));
+            $link = url('/backend/api/export_excel.php?' . $q);
+            return ['ok' => true, 'answer' => "Bấm để tải báo cáo tiến độ" . ($classId > 0 ? " lớp #$classId" : ' trong phạm vi được phép') . ": [Tải Excel]($link)"];
+        }
+        // This entry point owns its commit: a judge must never run in an outer transaction.
+        if ($pdo->inTransaction()) throw new LogicException('AI action requires its own transaction.');
+        $pdo->beginTransaction();
+        $auditMetadata = ['source' => 'ai'];
+        $queuedRunId = null;
+        try {
+            switch ($action) {
+                case 'create_user': {
+                    $chk = $pdo->prepare('SELECT id FROM users WHERE username = ? OR email = ?');
+                    $chk->execute([$params['username'], $params['email']]);
+                    if ($chk->fetch()) throw new DomainException('Username hoặc email đã tồn tại.');
+                    $initialPassword = bin2hex(random_bytes(12));
+                    $hash = password_hash($initialPassword, PASSWORD_DEFAULT);
+                    $pdo->prepare("INSERT INTO users (username, email, password_hash, full_name, role, class_code) VALUES (?, ?, ?, ?, ?, '')")
+                        ->execute([$params['username'], $params['email'], $hash, $params['full_name'], $params['role']]);
+                    $targetId = (int)$pdo->lastInsertId();
+                    $auditAction = 'user.create';
+                    $targetType = 'user';
+                    $auditMetadata['role'] = $params['role'];
+                    $classLink = url('/frontend/instructor/classes.php');
+                    $answer = "Đã tạo tài khoản **{$params['full_name']}** (@{$params['username']}) — mật khẩu khởi tạo `$initialPassword`. Chuyển riêng cho chủ tài khoản và yêu cầu đổi mật khẩu trong Hồ sơ; không chia sẻ cuộc trò chuyện này. Tài khoản chưa tham gia lớp. Thêm học viên tại [Quản lý lớp]($classLink).";
+                    break;
+                }
+                case 'add_test_case': {
+                    $pr = self::findProblem($params['ref']);
+                    if (!$pr) throw new DomainException("Không tìm thấy bài '{$params['ref']}'.");
+                    $stmtLatest = $pdo->prepare('SELECT version_number FROM problem_versions WHERE problem_id = ? ORDER BY version_number DESC LIMIT 1 FOR UPDATE');
+                    $stmtLatest->execute([(int)$pr['id']]);
+                    $latestNumber = $stmtLatest->fetchColumn();
+                    if ($latestNumber === false) throw new DomainException('Không tìm thấy phiên bản bộ test.');
+                    $verNum = (int)$latestNumber + 1;
+                    $stmtNew = $pdo->prepare("INSERT INTO problem_versions (problem_id, version_number, description, input_desc, output_desc, sample_input, sample_output, time_limit_ms, changelog, created_by) SELECT ?, ?, description, input_desc, output_desc, sample_input, sample_output, time_limit_ms, 'AI chatbot: thêm test case', ? FROM problem_versions WHERE id = ? AND problem_id = ?");
+                    $stmtNew->execute([$pr['id'], $verNum, $user['id'], $pr['current_version_id'], $pr['id']]);
+                    if ($stmtNew->rowCount() !== 1) throw new DomainException('Không có phiên bản bộ test hợp lệ cho bài tập này.');
                     $verId = (int)$pdo->lastInsertId();
-                    $pdo->prepare("INSERT INTO test_cases (problem_version_id, case_order, stdin_data, expected_output, is_public, is_boundary, points) SELECT ?, case_order, stdin_data, expected_output, is_public, is_boundary, points FROM test_cases WHERE problem_version_id = ? ORDER BY case_order")
+                    $pdo->prepare('INSERT INTO test_cases (problem_version_id, case_order, stdin_data, expected_output, is_public, is_boundary, points) SELECT ?, case_order, stdin_data, expected_output, is_public, is_boundary, points FROM test_cases WHERE problem_version_id = ? ORDER BY case_order')
                         ->execute([$verId, $pr['current_version_id']]);
                     $ord = (int)$pdo->query("SELECT COALESCE(MAX(case_order),0)+1 FROM test_cases WHERE problem_version_id = $verId")->fetchColumn();
-                    $pdo->prepare("INSERT INTO test_cases (problem_version_id, case_order, stdin_data, expected_output, is_public, is_boundary, points) VALUES (?, ?, ?, ?, ?, 0, 20)")
+                    $pdo->prepare('INSERT INTO test_cases (problem_version_id, case_order, stdin_data, expected_output, is_public, is_boundary, points) VALUES (?, ?, ?, ?, ?, 0, 20)')
                         ->execute([$verId, $ord, $params['stdin'], $params['expected'], !empty($params['is_public']) ? 1 : 0]);
-                    $pdo->prepare("UPDATE problems SET current_version_id = ? WHERE id = ?")->execute([$verId, $pr['id']]);
-                    $pdo->commit();
-                } catch (Exception $e) {
-                    if ($pdo->inTransaction()) $pdo->rollBack();
-                    throw $e;
+                    $pdo->prepare('UPDATE problems SET current_version_id = ? WHERE id = ?')->execute([$verId, $pr['id']]);
+                    $auditAction = 'dataset.create';
+                    $targetType = 'problem';
+                    $targetId = (int)$pr['id'];
+                    $auditMetadata['version_number'] = $verNum;
+                    $answer = "Đã thêm test case cho bài **{$pr['title']}** (phiên bản mới v$verNum).";
+                    break;
                 }
-                return ['ok' => true, 'answer' => "Đã thêm test case cho bài **{$pr['title']}** (phiên bản mới v$verNum)."];
+                case 'toggle_problem': {
+                    $pr = self::findProblem($params['ref']);
+                    if (!$pr) throw new DomainException("Không tìm thấy bài '{$params['ref']}'.");
+                    $newActive = (int)$pr['is_active'] === 1 ? 0 : 1;
+                    $pdo->prepare('UPDATE problems SET is_active = ? WHERE id = ?')->execute([$newActive, $pr['id']]);
+                    $auditAction = $newActive ? 'problem.enable' : 'problem.disable';
+                    $targetType = 'problem';
+                    $targetId = (int)$pr['id'];
+                    $new = $newActive ? 'hiển thị' : 'đang ẩn';
+                    $answer = "Bài **{$pr['title']}** giờ $new.";
+                    break;
+                }
+                case 'rejudge':
+                case 'retry_run': {
+                    $isRetry = $action === 'retry_run';
+                    $rid = $isRetry ? (int)$params['run_id'] : 0;
+                    if ($isRetry) {
+                        $stmtParent = $pdo->prepare('SELECT submission_id FROM judging_runs WHERE id = ?');
+                        $stmtParent->execute([$rid]);
+                        $sid = (int)$stmtParent->fetchColumn();
+                        if ($sid <= 0) throw new DomainException("Không tìm thấy run #$rid.");
+                    } else {
+                        $sid = (int)$params['submission_id'];
+                    }
+                    // Shared lock order with the HTTP rejudge/retry endpoints.
+                    $stmtSub = $pdo->prepare('SELECT * FROM submissions WHERE id = ? FOR UPDATE');
+                    $stmtSub->execute([$sid]);
+                    $sub = $stmtSub->fetch();
+                    if (!$sub) throw new DomainException("Không tìm thấy bài nộp #$sid.");
+                    if (!Auth::canViewSubmission($user, ['id' => (int)$sub['user_id']])) throw new DomainException('Bạn không có quyền chấm lại bài nộp này.');
+                    if ($isRetry) {
+                        $stmtRun = $pdo->prepare('SELECT * FROM judging_runs WHERE id = ? AND submission_id = ? FOR UPDATE');
+                        $stmtRun->execute([$rid, $sid]);
+                        $r = $stmtRun->fetch();
+                        if (!$r) throw new DomainException("Không tìm thấy run #$rid.");
+                        if (!in_array($r['status'], ['SYS_ERROR', 'QUEUED', 'RUNNING'], true)) throw new DomainException("Run #$rid đã xong bình thường — chỉ thử lại được run lỗi/kẹt.");
+                        $stmtVersion = $pdo->prepare('SELECT id, version_number FROM problem_versions WHERE id = ? AND problem_id = ?');
+                        $stmtVersion->execute([(int)$r['problem_version_id'], (int)$sub['problem_id']]);
+                    } else {
+                        $stmtVersion = $pdo->prepare('SELECT pv.id, pv.version_number FROM problems p JOIN problem_versions pv ON pv.id = p.current_version_id AND pv.problem_id = p.id WHERE p.id = ?');
+                        $stmtVersion->execute([(int)$sub['problem_id']]);
+                    }
+                    $version = $stmtVersion->fetch();
+                    if (!$version) throw new DomainException('Không có phiên bản bộ test hợp lệ cho bài tập này.');
+                    $dup = $pdo->prepare("SELECT id FROM judging_runs WHERE submission_id = ? AND id <> ? AND status IN ('QUEUED','RUNNING') LIMIT 1 FOR UPDATE");
+                    $dup->execute([$sid, $rid]);
+                    if ($dup->fetch()) throw new DomainException("Bài nộp #$sid đang có lượt chấm khác chờ/xử lý — đợi xong rồi thử lại.");
+                    $stmtLatest = $pdo->prepare('SELECT id, run_number FROM judging_runs WHERE submission_id = ? ORDER BY run_number DESC, id DESC LIMIT 1 FOR UPDATE');
+                    $stmtLatest->execute([$sid]);
+                    $latest = $stmtLatest->fetch();
+                    if ($isRetry && (!$latest || (int)$latest['id'] !== $rid)) throw new DomainException('Lần chấm này đã được thay thế. Hãy dùng lần chấm mới nhất.');
+                    $runNum = (int)($latest['run_number'] ?? 0) + 1;
+                    require_once __DIR__ . '/JudgeEngine.php';
+                    $pdo->prepare("INSERT INTO judging_runs (submission_id, problem_version_id, run_number, trigger_type, triggered_by, status, verdict) VALUES (?, ?, ?, ?, ?, 'QUEUED', 'PENDING')")
+                        ->execute([$sid, (int)$version['id'], $runNum, $isRetry ? 'SYS_RETRY' : 'REJUDGE', $user['id']]);
+                    $queuedRunId = (int)$pdo->lastInsertId();
+                    if ($isRetry) {
+                        $pdo->prepare("UPDATE judging_runs SET status = 'SYS_ERROR', verdict = 'SYS_ERR', system_error_detail = CONCAT(COALESCE(system_error_detail, ''), ' | Superseded by retry run #', ?), finished_at = COALESCE(finished_at, NOW()) WHERE id = ?")
+                            ->execute([$queuedRunId, $rid]);
+                        $auditMetadata['previous_run_id'] = $rid;
+                    }
+                    $auditAction = $isRetry ? 'judge.retry' : 'judge.rejudge';
+                    $targetType = 'run';
+                    $targetId = $queuedRunId;
+                    $auditMetadata += ['submission_id' => $sid, 'problem_id' => (int)$sub['problem_id'], 'version_number' => (int)$version['version_number']];
+                    break;
+                }
+                default:
+                    throw new DomainException('Thao tác không được phép.');
             }
-            case 'toggle_problem': {
-                $pr = self::findProblem($params['ref']);
-                if (!$pr) throw new Exception("Không tìm thấy bài '{$params['ref']}'.");
-                $pdo->prepare("UPDATE problems SET is_active = 1 - is_active WHERE id = ?")->execute([$pr['id']]);
-                $new = $pdo->query("SELECT is_active FROM problems WHERE id = {$pr['id']}")->fetchColumn() ? 'hiển thị' : 'đang ẩn';
-                return ['ok' => true, 'answer' => "Bài **{$pr['title']}** giờ $new."];
-            }
-            case 'rejudge': {
-                $sid = (int)$params['submission_id'];
-                $sub = $pdo->prepare("SELECT * FROM submissions WHERE id = ?");
-                $sub->execute([$sid]);
-                if (!$sub->fetch()) throw new Exception("Không tìm thấy bài nộp #$sid.");
-                require_once __DIR__ . '/JudgeEngine.php';
-                $dup = $pdo->prepare("SELECT id FROM judging_runs WHERE submission_id = ? AND status IN ('QUEUED','RUNNING') LIMIT 1");
-                $dup->execute([$sid]);
-                if ($dup->fetch()) throw new Exception("Bài nộp #$sid đang có lượt chấm chờ/xử lý — đợi xong rồi thử lại.");
-                $verId = (int)$pdo->query("SELECT current_version_id FROM problems WHERE id = (SELECT problem_id FROM submissions WHERE id = $sid)")->fetchColumn();
-                $runNum = (int)$pdo->query("SELECT COALESCE(MAX(run_number),0)+1 FROM judging_runs WHERE submission_id = $sid")->fetchColumn();
-                $pdo->prepare("INSERT INTO judging_runs (submission_id, problem_version_id, run_number, trigger_type, triggered_by, status, verdict) VALUES (?, ?, ?, 'REJUDGE', ?, 'QUEUED', 'PENDING')")
-                    ->execute([$sid, $verId, $runNum, $user['id']]);
-                $runId = (int)$pdo->lastInsertId();
-                $res = JudgeEngine::processJudgingRun($pdo, $runId);
-                return ['ok' => true, 'answer' => "Đã chấm lại bài nộp #$sid: **{$res['verdict']}** ({$res['score']} điểm)."];
-            }
-            case 'retry_run': {
-                $rid = (int)$params['run_id'];
-                $run = $pdo->prepare("SELECT jr.*, s.problem_id FROM judging_runs jr JOIN submissions s ON s.id = jr.submission_id WHERE jr.id = ?");
-                $run->execute([$rid]);
-                $r = $run->fetch();
-                if (!$r) throw new Exception("Không tìm thấy run #$rid.");
-                if (!in_array($r['status'], ['SYS_ERROR', 'QUEUED', 'RUNNING'], true)) throw new Exception("Run #$rid đã xong bình thường — chỉ thử lại được run lỗi/kẹt.");
-                require_once __DIR__ . '/JudgeEngine.php';
-                $runNum = (int)$pdo->query("SELECT COALESCE(MAX(run_number),0)+1 FROM judging_runs WHERE submission_id = {$r['submission_id']}")->fetchColumn();
-                $pdo->prepare("INSERT INTO judging_runs (submission_id, problem_version_id, run_number, trigger_type, triggered_by, status, verdict) VALUES (?, ?, ?, 'SYS_RETRY', ?, 'QUEUED', 'PENDING')")
-                    ->execute([$r['submission_id'], $r['problem_version_id'], $runNum, $user['id']]);
-                $newId = (int)$pdo->lastInsertId();
-                $pdo->prepare("UPDATE judging_runs SET status='SYS_ERROR', verdict='SYS_ERR', finished_at=COALESCE(finished_at,NOW()) WHERE id = ? AND status <> 'COMPLETED'")->execute([$rid]);
-                $res = JudgeEngine::processJudgingRun($pdo, $newId);
-                return ['ok' => true, 'answer' => "Đã thử lại run #$rid → run mới #$newId: **{$res['verdict']}** ({$res['score']}đ)."];
-            }
-            case 'export_progress': {
-                $cls = $params['class_code'] !== '' ? $params['class_code']
-                    : ($user['role'] === 'teacher' && $user['class_code'] !== 'ALL' ? $user['class_code'] : '');
-                if ($user['role'] === 'teacher' && $user['class_code'] !== 'ALL') $cls = $user['class_code'];
-                $q = http_build_query(array_filter(['type' => 'progress', 'class_code' => $cls ?: null]));
-                $link = url('/backend/api/export_excel.php?' . $q);
-                return ['ok' => true, 'answer' => "Bấm để tải báo cáo tiến độ" . ($cls ? " lớp $cls" : '') . ": [Tải Excel]($link)"];
-            }
+            // $user is the authenticated caller, never model/request action parameters.
+            AuditLog::record($pdo, $user, $auditAction, $targetType, $targetId, $auditMetadata);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $e;
         }
-        throw new Exception('Thao tác không được phép.');
+        if ($queuedRunId !== null) {
+            // The audit describes acceptance; dispatch cannot precede a successful commit.
+            $res = JudgeEngine::processJudgingRun($pdo, $queuedRunId);
+            $verdict = $res['verdict'] ?? 'SYS_ERR';
+            $score = $res['score'] ?? 0;
+            $answer = $isRetry
+                ? "Đã thử lại run #$rid → run mới #$queuedRunId: **$verdict** ({$score}đ)."
+                : "Đã chấm lại bài nộp #$sid: **$verdict** ($score điểm).";
+        }
+        return ['ok' => true, 'answer' => $answer];
     }
 
     private static function findProblem(string $ref): ?array
@@ -368,12 +461,11 @@ class AIAssistant
         $ref = trim($ref);
         if ($ref === '') return null;
         if (ctype_digit($ref)) {
-            $st = $pdo->prepare("SELECT * FROM problems WHERE id = ?");
+            $st = $pdo->prepare('SELECT * FROM problems WHERE id = ? FOR UPDATE');
             $st->execute([(int)$ref]);
-            $r = $st->fetch();
-            if ($r) return $r;
+            return $st->fetch() ?: null;
         }
-        $st = $pdo->prepare("SELECT * FROM problems WHERE title LIKE ? OR slug = ? LIMIT 1");
+        $st = $pdo->prepare('SELECT * FROM problems WHERE title LIKE ? OR slug = ? LIMIT 1 FOR UPDATE');
         $st->execute(["%$ref%", $ref]);
         return $st->fetch() ?: null;
     }
@@ -382,15 +474,21 @@ class AIAssistant
 
     public static function answerQA(array $user, string $text): string
     {
-        $isTeacher = in_array($user['role'], ['teacher', 'admin'], true);
+        // Không gửi danh sách học viên hay mã lớp legacy vào ngữ cảnh AI.
+        $scopeDescription = match ($user['role']) {
+            'admin' => 'quản trị toàn hệ thống',
+            'teacher' => 'chỉ học viên có membership active trong các lớp mình sở hữu và bài nộp của mình',
+            default => 'chỉ dữ liệu cá nhân của mình',
+        };
         $system = "Bạn là trợ lý của hệ thống chấm bài AlgoJudge (tiếng Việt, xưng hô thầy/cô với giảng viên, bạn với học viên). "
-            . "Người hỏi: {$user['full_name']} (vai trò {$user['role']}" . ($isTeacher ? ", lớp {$user['class_code']}" : '') . ").\n"
+            . "Người hỏi: {$user['full_name']} (vai trò {$user['role']}; phạm vi: $scopeDescription).\n"
             . "BẢN ĐỒ TÍNH NĂNG:\n"
             . "- Luyện tập: Danh sách bài tập (/frontend/index.php), Sân chơi tự do (/frontend/playground.php), Bảng xếp hạng (/frontend/leaderboard.php), Lịch sử nộp bài (/frontend/submissions.php), Hồ sơ & XP (/frontend/profile.php).\n"
-            . "- Giảng dạy: Danh sách bài tập (/frontend/instructor/problems.php), Thêm bài (/frontend/instructor/problem_form.php), Bộ test & phiên bản (/frontend/instructor/dataset_versions.php), Chấm lại (/frontend/instructor/rejudge.php), Hàng đợi chấm (/frontend/instructor/queue.php), Tiến độ học viên (/frontend/instructor/progress.php).\n"
+            . "- Giảng dạy: Danh sách bài tập (/frontend/instructor/problems.php), Thêm bài (/frontend/instructor/problem_form.php), Bộ test & phiên bản (/frontend/instructor/dataset_versions.php), Chấm lại (/frontend/instructor/rejudge.php), Hàng đợi chấm (/frontend/instructor/queue.php), Tiến độ học viên (/frontend/instructor/progress.php), Quản lý lớp (/frontend/instructor/classes.php).\n"
             . "- Quản trị: Danh sách tài khoản (/frontend/admin/users.php), Tạo tài khoản (/frontend/admin/user_form.php).\n"
             . "QUY TẮC:\n"
-            . "- Chỉ trả lời trong phạm vi các tính năng trên; việc ngoài phạm vi thì nói không làm được.\n"
+            . "- Chỉ trả lời trong phạm vi các tính năng trên; việc ngoài phạm vi thì nói không làm được. Không suy đoán số liệu hoặc tiết lộ dữ liệu ngoài phạm vi quyền của người hỏi.\n"
+            . "- Tạo tài khoản chỉ dành cho admin, không gán lớp bằng mã tự do. Thêm học viên vào lớp tại Quản lý lớp; xuất báo cáo chọn class_id.\n"
             . "- TUYỆT ĐỐI không hướng dẫn: xóa dữ liệu, sửa điểm/XP, đổi vai trò, xem mật khẩu, giải hộ bài tập (với học viên chỉ gợi ý hướng, không đưa code).\n"
             . "- Trả lời ngắn gọn (dưới 150 từ), kèm link trang liên quan khi có. Dùng Markdown đơn giản.";
         if (!AIHelper::hasKey()) {

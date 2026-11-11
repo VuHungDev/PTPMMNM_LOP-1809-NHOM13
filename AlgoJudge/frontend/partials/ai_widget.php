@@ -75,7 +75,14 @@
     const preview = document.getElementById('ai-preview');
     const base = '<?= url('') ?>';
     const isStaff = <?= in_array($user['role'] ?? '', ['teacher', 'admin'], true) ? 'true' : 'false' ?>;
-    const HIST_KEY = 'ai-chat-history';
+    const HIST_KEY = 'ai-chat-history:<?= (int)($user['id'] ?? 0) ?>:<?= e($_SESSION['chat_scope'] ?? '') ?>';
+    try {
+        // Clear the legacy/global key and other login sessions in this tab.
+        for (let i = sessionStorage.length - 1; i >= 0; i--) {
+            const key = sessionStorage.key(i);
+            if (key?.startsWith('ai-chat-history') && key !== HIST_KEY) sessionStorage.removeItem(key);
+        }
+    } catch (_) {}
 
     function loadHistory() {
         try { return JSON.parse(sessionStorage.getItem(HIST_KEY) || '[]'); } catch (_) { return []; }
@@ -118,6 +125,7 @@
         msgs.scrollTop = msgs.scrollHeight;
         if (record) {
             history.push({ text: html, mine, raw: true });
+            if (history.length > 60) history.splice(0, history.length - 60);
             saveHistory(history);
         }
     }
@@ -136,7 +144,7 @@
         btnSend.disabled = true;
         try {
             const res = await fetch(base + '/backend/api/ai_chat.php', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
                 body: JSON.stringify({ text }),
             });
             const j = await res.json();
@@ -170,11 +178,12 @@
             btn.disabled = true;
             try {
                 const res = await fetch(base + '/backend/api/ai_chat.php', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
                     body: JSON.stringify({ confirm_token: j.token }),
                 });
                 const r = await res.json();
-                bubble(r.ok ? md(r.answer) : 'Lỗi: ' + md(r.error || 'không rõ'), false);
+                // Action responses can contain initial credentials; do not persist them.
+                bubble(r.ok ? md(r.answer) : 'Lỗi: ' + md(r.error || 'không rõ'), false, false);
             } catch (e) {
                 bubble('Mất kết nối, hãy thử lại.', false);
             }
@@ -255,7 +264,7 @@
             btn.disabled = true;
             try {
                 const res = await fetch(base + '/backend/api/ai_create_problem.php', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
                     body: JSON.stringify(collect()),
                 });
                 const j = await res.json();

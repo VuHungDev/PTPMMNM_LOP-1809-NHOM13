@@ -11,16 +11,18 @@ if ($langFilter !== '' && !JudgeEngine::isSupported($langFilter)) {
     $langFilter = '';
 }
 
+$isStudent = $user['role'] === 'student';
+$solvedSql = $isStudent ? "(SELECT final_verdict FROM submissions s WHERE s.problem_id = p.id AND s.user_id = :uid AND s.final_verdict = 'AC' LIMIT 1)" : 'NULL';
 $sql = "
     SELECT p.*, pv.version_number, pv.time_limit_ms,
-           (SELECT final_verdict FROM submissions s WHERE s.problem_id = p.id AND s.user_id = :uid AND s.final_verdict = 'AC' LIMIT 1) AS solved_status,
+           $solvedSql AS solved_status,
            (SELECT COUNT(DISTINCT s2.user_id) FROM submissions s2 WHERE s2.problem_id = p.id AND s2.final_verdict = 'AC') AS ac_users,
            (SELECT COUNT(DISTINCT s3.user_id) FROM submissions s3 WHERE s3.problem_id = p.id) AS tried_users
     FROM problems p
     JOIN problem_versions pv ON pv.id = p.current_version_id
     WHERE p.is_active = 1
 ";
-$params = [':uid' => $user['id']];
+$params = $isStudent ? [':uid' => $user['id']] : [];
 if ($topicFilter !== '') {
     $sql .= " AND p.topic = :topic";
     $params[':topic'] = $topicFilter;
@@ -57,10 +59,12 @@ $stmt->execute($params);
 $problems = $stmt->fetchAll();
 $baseQuery = array_filter(['topic' => $topicFilter ?: null, 'difficulty' => $diffFilter ?: null, 'lang' => $langFilter ?: null]);
 
-$stmtSolved = $pdo->prepare("SELECT COUNT(DISTINCT problem_id) FROM submissions WHERE user_id = ? AND final_verdict = 'AC'");
-$stmtSolved->execute([$user['id']]);
-$solvedCount = (int)$stmtSolved->fetchColumn();
-$totalCount = (int)$pdo->query("SELECT COUNT(*) FROM problems WHERE is_active = 1")->fetchColumn();
+if ($isStudent) {
+    $stmtSolved = $pdo->prepare("SELECT COUNT(DISTINCT s.problem_id) FROM submissions s JOIN problems p ON p.id = s.problem_id WHERE s.user_id = ? AND s.final_verdict = 'AC' AND p.is_active = 1");
+    $stmtSolved->execute([$user['id']]);
+    $solvedCount = (int)$stmtSolved->fetchColumn();
+    $totalCount = (int)$pdo->query("SELECT COUNT(*) FROM problems WHERE is_active = 1")->fetchColumn();
+}
 
 $pageTitle = 'Luyện tập lập trình';
 $activeNav = 'train';
@@ -72,10 +76,12 @@ require FE_DIR . '/partials/layout_head.php';
             <h1 style="font-size:1.85rem; margin-bottom:8px;">Hệ thống Luyện tập &amp; Chấm bài Tự động</h1>
             <p style="opacity:0.85;">Viết mã C / C++ / Java / Python / PHP / JS trực tiếp trên trình duyệt, chạy thử và nhận kết quả chấm tức thì.</p>
         </div>
+        <?php if ($isStudent): ?>
         <div style="background:rgba(255,255,255,0.1); padding:16px 24px; border-radius:12px; text-align:center;">
             <div style="font-size:0.85rem; opacity:0.8;">TIẾN ĐỘ HOÀN THÀNH</div>
             <div style="font-size:1.8rem; font-weight:800; color:#38bdf8;"><?= $solvedCount ?> / <?= $totalCount ?> bài</div>
         </div>
+        <?php endif; ?>
     </div>
 </div>
 
@@ -107,7 +113,7 @@ require FE_DIR . '/partials/layout_head.php';
         <table style="width:100%; border-collapse:collapse; text-align:left;">
             <thead>
                 <tr style="background:#f8fafc; border-bottom:1px solid var(--cl-border); font-size:0.85rem; color:var(--cl-muted); text-transform:uppercase;">
-                    <th style="padding:14px 20px;">Trạng thái</th>
+                    <?php if ($isStudent): ?><th style="padding:14px 20px;">Trạng thái</th><?php endif; ?>
                     <th style="padding:14px 20px;">Tên bài tập</th>
                     <th style="padding:14px 20px;">Chủ đề</th>
                     <th style="padding:14px 20px;">Độ khó</th>
@@ -121,6 +127,7 @@ require FE_DIR . '/partials/layout_head.php';
             <tbody>
                 <?php foreach ($problems as $p): ?>
                 <tr style="border-bottom:1px solid var(--cl-border);">
+                    <?php if ($isStudent): ?>
                     <td style="padding:14px 20px;">
                         <?php if ($p['solved_status'] === 'AC'): ?>
                             <span class="badge verdict-AC">✔ Đã giải (AC)</span>
@@ -128,6 +135,7 @@ require FE_DIR . '/partials/layout_head.php';
                             <span class="badge" style="background:#f1f5f9; color:#64748b;">Chưa giải</span>
                         <?php endif; ?>
                     </td>
+                    <?php endif; ?>
                     <td style="padding:14px 20px; font-weight:700;">
                         <a href="<?= url('/frontend/workspace.php?id=' . (int)$p['id']) ?>" style="color:var(--cl-text); text-decoration:none;">
                             <?= e($p['title']) ?>
@@ -140,7 +148,7 @@ require FE_DIR . '/partials/layout_head.php';
                     <td style="padding:14px 20px; color:var(--cl-muted); font-size:0.9rem;"><?= (int)$p['time_limit_ms'] ?> ms</td>
                     <td style="padding:14px 20px; font-size:0.9rem;" title="<?= (int)$p['ac_users'] ?> / <?= (int)$p['tried_users'] ?> người giải đúng"><?= (int)$p['tried_users'] > 0 ? round((int)$p['ac_users'] / (int)$p['tried_users'] * 100) . '%' : '—' ?></td>
                     <td style="padding:14px 20px; text-align:right;">
-                        <a href="<?= url('/frontend/workspace.php?id=' . (int)$p['id']) ?>" class="btn btn-primary" style="padding:6px 14px;">Làm bài →</a>
+                        <a href="<?= url('/frontend/workspace.php?id=' . (int)$p['id']) ?>" class="btn btn-primary" style="padding:6px 14px;"><?= $isStudent ? 'Làm bài' : 'Xem / chạy thử' ?> →</a>
                     </td>
                 </tr>
                 <?php endforeach; ?>

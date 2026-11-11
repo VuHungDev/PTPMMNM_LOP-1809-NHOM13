@@ -37,11 +37,12 @@ define('BE_DIR', dirname(__DIR__));            // .../AlgoJudge/backend
 define('FE_DIR', dirname(BE_DIR) . '/frontend'); // .../AlgoJudge/frontend
 
 // --- Kết nối MySQL (MariaDB của XAMPP, ưu tiên cổng 3307) ---
-define('DB_HOST', '127.0.0.1');
-define('DB_PORTS', [3307, 3306]); // thử 3307 trước, rồi 3306
-define('DB_NAME', 'algojudge');
-define('DB_USER', 'root');
-define('DB_PASS', '');
+// AJ_DB_* allows isolated verification without changing the working database.
+define('DB_HOST', getenv('AJ_DB_HOST') ?: '127.0.0.1');
+define('DB_PORTS', getenv('AJ_DB_PORT') ? [(int)getenv('AJ_DB_PORT')] : [3307, 3306]);
+define('DB_NAME', getenv('AJ_DB_NAME') ?: 'algojudge');
+define('DB_USER', getenv('AJ_DB_USER') ?: 'root');
+define('DB_PASS', getenv('AJ_DB_PASS') ?: '');
 
 // --- Công cụ chấm bài cách ly (chạy trên máy chấm, không phải tiến trình Web) ---
 // Bật TRUE để mô phỏng ngắt bộ thực thi (kiểm thử Phép thử số 2)
@@ -136,3 +137,46 @@ function url(string $path): string
 {
     return BASE_URL . $path;
 }
+
+function csrf_token(): string
+{
+    if (empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+    return $_SESSION['csrf_token'];
+}
+
+function csrf_field(): string
+{
+    return '<input type="hidden" name="csrf_token" value="' . htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8') . '">';
+}
+
+function csrf_verify(): void
+{
+    $token = $_POST['csrf_token'] ?? '';
+    if (!is_string($token) || !hash_equals(csrf_token(), $token)) {
+        http_response_code(403);
+        die('Yêu cầu không hợp lệ. Vui lòng tải lại trang và thử lại.');
+    }
+}
+
+function csrf_verify_api(): void
+{
+    header('Content-Type: application/json; charset=utf-8');
+    if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+        header('Allow: POST');
+        http_response_code(405);
+        echo json_encode(['ok' => false, 'error' => 'Chỉ chấp nhận POST.']);
+        exit;
+    }
+    $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? $_POST['csrf_token'] ?? '';
+    if (!is_string($token) || !hash_equals(csrf_token(), $token)) {
+        http_response_code(403);
+        echo json_encode(['ok' => false, 'error' => 'Phiên xác nhận không hợp lệ. Hãy tải lại trang.']);
+        exit;
+    }
+}
+
+$__composerAutoload = dirname(__DIR__, 2) . '/vendor/autoload.php';
+if (is_file($__composerAutoload)) require_once $__composerAutoload;
+unset($__composerAutoload);

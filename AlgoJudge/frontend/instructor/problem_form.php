@@ -2,6 +2,7 @@
 // frontend/instructor/problem_form.php — Thêm / sửa bài tập (tách khỏi problems.php).
 // Trang này chỉ lo form tạo + sửa; problems.php chỉ lo danh sách + ẩn/hiện.
 require_once __DIR__ . '/../../backend/lib/Auth.php';
+require_once __DIR__ . '/../../backend/lib/AuditLog.php';
 require_once __DIR__ . '/../../backend/lib/JudgeEngine.php';
 $user = Auth::requireRole(['teacher', 'admin']);
 $msg = '';
@@ -11,7 +12,7 @@ $editing = null;
 $editId = (int)($_GET['edit'] ?? 0);
 if ($editId > 0) {
     $stmtE = $pdo->prepare("
-        SELECT p.*, pv.* FROM problems p
+        SELECT p.*, pv.*, p.id AS id FROM problems p
         JOIN problem_versions pv ON pv.id = p.current_version_id
         WHERE p.id = ?
     ");
@@ -26,6 +27,7 @@ if ($editId > 0) {
 
 $action = $_POST['action'] ?? '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($action === 'create' || $action === 'update')) {
+    csrf_verify();
     $title = trim($_POST['title'] ?? '');
     $slug = trim($_POST['slug'] ?? '');
     if ($slug === '' && $title !== '') {
@@ -106,8 +108,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($action === 'create' || $action ==
             $errStep = 3;
             $keepInput();
         } else {
+            $ownsTransaction = false;
             try {
+                if ($pdo->inTransaction()) throw new LogicException('Problem mutation requires its own transaction.');
                 $pdo->beginTransaction();
+                $ownsTransaction = true;
                 if ($action === 'create') {
                     $chk = $pdo->prepare("SELECT id FROM problems WHERE slug = ?");
                     $chk->execute([$slug]);
@@ -121,14 +126,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($action === 'create' || $action ==
                     $changelog = 'Phiên bản khởi tạo';
                 } else {
                     $problemId = (int)($_POST['problem_id'] ?? 0);
-                    $stmtCur = $pdo->prepare("SELECT * FROM problem_versions WHERE problem_id = ? ORDER BY version_number DESC LIMIT 1");
+                    // Serialize every new version on the parent, including dataset/AI edits.
+                    $stmtProblem = $pdo->prepare('SELECT id FROM problems WHERE id = ? FOR UPDATE');
+                    $stmtProblem->execute([$problemId]);
+                    if (!$stmtProblem->fetchColumn()) throw new DomainException('Không tìm thấy bài tập.');
+                    $stmtCur = $pdo->prepare('SELECT version_number FROM problem_versions WHERE problem_id = ? ORDER BY version_number DESC LIMIT 1 FOR UPDATE');
                     $stmtCur->execute([$problemId]);
-                    if (!$stmtCur->fetch()) {
-                        throw new Exception('Không tìm thấy bài tập.');
-                    }
+                    $currentVersion = $stmtCur->fetchColumn();
+                    if ($currentVersion === false) throw new DomainException('Không tìm thấy phiên bản bài tập.');
                     $pdo->prepare("UPDATE problems SET slug = ?, title = ?, topic = ?, difficulty = ?, suggested_lang = ? WHERE id = ?")
                         ->execute([$slug, $title, $topic, $difficulty, $suggestLang, $problemId]);
-                    $verNum = (int)$pdo->query("SELECT COALESCE(MAX(version_number),0)+1 FROM problem_versions WHERE problem_id = $problemId")->fetchColumn();
+                    $verNum = (int)$currentVersion + 1;
                     $changelog = trim($_POST['changelog'] ?? 'Cập nhật đề / test');
                 }
                 $pdo->prepare("INSERT INTO problem_versions (problem_id, version_number, description, input_desc, output_desc, sample_input, sample_output, time_limit_ms, changelog, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
@@ -139,11 +147,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($action === 'create' || $action ==
                     $insCase->execute([$verId, $i + 1, $c[0], $c[1], $c[2], $c[3]]);
                 }
                 $pdo->prepare("UPDATE problems SET current_version_id = ? WHERE id = ?")->execute([$verId, $problemId]);
+                AuditLog::record($pdo, $user, $action === 'create' ? 'problem.create' : 'problem.update', 'problem', $problemId, ['version_number' => $verNum, 'source' => 'ui']);
                 $pdo->commit();
+                $ownsTransaction = false;
                 header('Location: ' . url('/frontend/instructor/problems.php'));
                 exit;
-            } catch (Exception $e) {
-                if ($pdo->inTransaction()) {
+            } catch (Throwable $e) {
+                if ($ownsTransaction && $pdo->inTransaction()) {
                     $pdo->rollBack();
                 }
                 $err = $e->getMessage() . ' Các thông tin đã nhập vẫn giữ nguyên, chỉ cần sửa chỗ sai.';
@@ -162,7 +172,7 @@ $ecases = $editing['cases'] ?? [['stdin_data' => '', 'expected_output' => '', 'i
 <div style="max-width:760px; margin:28px auto; padding:0 24px;">
     <h2 style="margin-bottom:4px;"><?= $editing ? 'Sửa bài tập #' . (int)$editing['id'] : 'Tạo bài tập mới' ?></h2>
     <p style="color:var(--cl-muted); margin:0 0 8px;">Chỉ 3 bước — mất khoảng 2 phút.</p>
-    <p style="margin-bottom:16px;"><a href="<?= url('/frontend/instructor/problems.php') ?>">← Về danh sách bài tập</a></p>
+    <p style="margin-bottom:16px;"><a class="btn btn-secondary btn-back" href="<?= url('/frontend/instructor/problems.php') ?>">← Về danh sách bài tập</a></p>
 
     <?php if ($err): ?><div style="background:#fee2e2; color:#b91c1c; padding:12px 18px; border-radius:8px; margin-bottom:16px; font-weight:600;">✘ <?= e($err) ?></div><?php endif; ?>
     <div id="pf-draft-note" hidden style="background:#fef9c3; color:#854d0e; padding:10px 16px; border-radius:8px; margin-bottom:12px; font-size:0.85rem;">Đã khôi phục bản nháp bạn đang nhập dở. <button type="button" id="pf-draft-clear" style="text-decoration:underline; background:none; border:none; cursor:pointer; color:inherit; font-size:inherit;">Xóa nháp</button></div>
@@ -176,6 +186,7 @@ $ecases = $editing['cases'] ?? [['stdin_data' => '', 'expected_output' => '', 'i
 
     <div style="background:#fff; padding:24px; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.05);">
         <form method="POST" id="problem-form" novalidate>
+            <?= csrf_field() ?>
             <input type="hidden" name="action" value="<?= $editing ? 'update' : 'create' ?>">
             <?php if ($editing && ($editing['id'] ?? 0) > 0): ?><input type="hidden" name="problem_id" value="<?= (int)$editing['id'] ?>"><?php endif; ?>
 
@@ -264,10 +275,10 @@ $ecases = $editing['cases'] ?? [['stdin_data' => '', 'expected_output' => '', 'i
             </section>
 
             <div style="display:flex; gap:10px; margin-top:16px;">
-                <button type="button" class="btn" id="pf-back" style="background:#e2e8f0;" hidden>← Quay lại</button>
+                <button type="button" class="btn btn-secondary btn-back" id="pf-back" style="display:none;" hidden>← Quay lại</button>
                 <button type="button" class="btn btn-primary" id="pf-next" style="flex:1; justify-content:center;">Tiếp tục →</button>
-                <button type="submit" class="btn btn-primary" id="pf-submit" style="flex:1; justify-content:center;" hidden><?= $editing && ($editing['id'] ?? 0) > 0 ? 'Lưu bài tập' : 'Tạo bài tập' ?></button>
-                <a class="btn" style="background:#f1f5f9;" href="<?= url('/frontend/instructor/problems.php') ?>">Hủy</a>
+                <button type="submit" class="btn btn-primary" id="pf-submit" style="flex:1; justify-content:center; display:none;" hidden><?= $editing && ($editing['id'] ?? 0) > 0 ? 'Lưu bài tập' : 'Tạo bài tập' ?></button>
+                <a class="btn btn-secondary btn-back" href="<?= url('/frontend/instructor/problems.php') ?>">Hủy</a>
             </div>
         </form>
     </div>
@@ -303,6 +314,10 @@ $ecases = $editing['cases'] ?? [['stdin_data' => '', 'expected_output' => '', 'i
         btnBack.hidden = n === 1;
         btnNext.hidden = n === 3;
         btnSubmit.hidden = n !== 3;
+        // .btn sets display:inline-flex, so enforce hidden controls explicitly too.
+        btnBack.style.display = btnBack.hidden ? 'none' : '';
+        btnNext.style.display = btnNext.hidden ? 'none' : '';
+        btnSubmit.style.display = btnSubmit.hidden ? 'none' : '';
         window.scrollTo({ top: 0, behavior: 'smooth' });
     }
     function validPane(n, mark) {

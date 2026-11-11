@@ -2,8 +2,11 @@
 export const API_BASE = '/AlgoJudge/backend/api';
 export const LOGIN_URL = '/AlgoJudge/frontend/auth/login.php';
 
-export async function apiFetch(path, { method = 'GET', body = null, onAuthExpired = null } = {}) {
-    const opts = { method, credentials: 'same-origin', headers: {} };
+export async function apiFetch(path, { method = 'GET', body = null, headers = {}, onAuthExpired = null } = {}) {
+    const opts = { method, credentials: 'same-origin', headers: { ...headers } };
+    if (!['GET', 'HEAD'].includes(method.toUpperCase())) {
+        opts.headers['X-CSRF-Token'] = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    }
     if (body !== null) {
         opts.headers['Content-Type'] = 'application/json';
         opts.body = typeof body === 'string' ? body : JSON.stringify(body);

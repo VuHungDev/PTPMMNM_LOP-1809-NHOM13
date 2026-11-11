@@ -5,7 +5,8 @@ require_once __DIR__ . '/../lib/Auth.php';
 require_once __DIR__ . '/../lib/AIHelper.php';
 
 header('Content-Type: application/json; charset=utf-8');
-$user = Auth::requireRole(['teacher', 'admin']);
+$user = Auth::requireApiRole(['teacher', 'admin']);
+csrf_verify_api();
 
 try {
     $body = json_decode(file_get_contents('php://input'), true) ?? [];

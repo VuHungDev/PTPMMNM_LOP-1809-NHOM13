@@ -3,7 +3,16 @@
 require_once __DIR__ . '/../../backend/lib/Auth.php';
 
 $error = '';
+// Only fixed messages are accepted; never reflect arbitrary query text or credentials.
+$reason = $_GET['reason'] ?? '';
+$notices = [
+    'password_changed' => 'Đổi mật khẩu thành công. Tất cả phiên đăng nhập đã hết hiệu lực. Vui lòng đăng nhập lại bằng mật khẩu mới.',
+    'email_changed' => 'Đổi email thành công. Tất cả phiên đăng nhập đã hết hiệu lực. Vui lòng đăng nhập lại bằng tên đăng nhập và mật khẩu hiện tại.',
+    'password_reset' => 'Đặt lại mật khẩu thành công. Tất cả phiên đăng nhập đã hết hiệu lực. Vui lòng đăng nhập bằng mật khẩu mới.',
+];
+$notice = is_string($reason) ? ($notices[$reason] ?? '') : '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    csrf_verify();
     $username = trim($_POST['username'] ?? '');
     $password = $_POST['password'] ?? '';
     $stmt = $pdo->prepare("SELECT * FROM users WHERE username = ? LIMIT 1");
@@ -13,14 +22,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ((int)($u['is_active'] ?? 1) === 0) {
             $error = 'Tài khoản của bạn đã bị khóa. Vui lòng liên hệ quản trị viên.';
         } else {
-            $_SESSION['user'] = [
-                'id' => (int)$u['id'],
-                'username' => $u['username'],
-                'full_name' => $u['full_name'],
-                'role' => $u['role'],
-                'class_code' => $u['class_code'],
-                'xp_points' => (int)$u['xp_points'],
-            ];
+            Auth::login($u);
             header('Location: ' . url('/frontend/index.php'));
             exit;
         }
@@ -43,13 +45,16 @@ require FE_DIR . '/partials/layout_head.php';
     <div class="auth-form-wrap">
         <div class="auth-card">
             <h2 style="margin-bottom:20px;">Đăng nhập</h2>
+            <?php if ($notice): ?><div role="status" style="background:#dcfce7; color:#15803d; padding:10px 14px; border-radius:8px; margin-bottom:14px;"><?= e($notice) ?></div><?php endif; ?>
             <?php if ($error): ?><div style="background:#fee2e2; color:#b91c1c; padding:10px 14px; border-radius:8px; margin-bottom:14px;"><?= e($error) ?></div><?php endif; ?>
             <form method="POST">
+                <?= csrf_field() ?>
                 <div class="form-group"><label>Tên đăng nhập</label><input type="text" name="username" class="form-control" required></div>
                 <div class="form-group"><label>Mật khẩu</label><input type="password" name="password" class="form-control" required></div>
                 <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center;">Đăng nhập</button>
             </form>
-            <p style="margin-top:14px; font-size:0.9rem;">Chưa có tài khoản? <a href="<?= url('/frontend/auth/register.php') ?>">Đăng ký học viên</a></p>
+            <p style="margin-top:14px; font-size:0.9rem;"><a href="<?= url('/frontend/auth/forgot_password.php') ?>">Quên mật khẩu?</a></p>
+            <p style="margin-top:8px; font-size:0.9rem;">Chưa có tài khoản? <a href="<?= url('/frontend/auth/register.php') ?>">Đăng ký học viên</a></p>
         </div>
     </div>
 </div>

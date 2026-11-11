@@ -2,12 +2,15 @@
 // backend/api/ai_create_problem.php — Đẩy khung bài đã duyệt thành bài tập thật (giống problem_form.php).
 require_once __DIR__ . '/../config/bootstrap.php';
 require_once __DIR__ . '/../lib/Auth.php';
+require_once __DIR__ . '/../lib/AuditLog.php';
 require_once __DIR__ . '/../lib/AIHelper.php';
 require_once __DIR__ . '/../lib/JudgeEngine.php';
 
 header('Content-Type: application/json; charset=utf-8');
-$user = Auth::requireRole(['teacher', 'admin']);
+$user = Auth::requireApiRole(['teacher', 'admin']);
+csrf_verify_api();
 
+$ownsTransaction = false;
 try {
     $b = json_decode(file_get_contents('php://input'), true) ?? [];
     $title = trim((string)($b['title'] ?? ''));
@@ -44,7 +47,9 @@ try {
         throw new Exception('Cần ít nhất 1 test case có đủ Input + Output.');
     }
 
+    if ($pdo->inTransaction()) throw new LogicException('Problem creation requires its own transaction.');
     $pdo->beginTransaction();
+    $ownsTransaction = true;
     $pdo->prepare("INSERT INTO problems (slug, title, topic, difficulty, suggested_lang, created_by) VALUES (?, ?, ?, ?, 'python', ?)")
         ->execute([$slug, $title, $topic, $difficulty, $user['id']]);
     $problemId = (int)$pdo->lastInsertId();
@@ -56,12 +61,14 @@ try {
         $ins->execute([$verId, $i + 1, $c[0], $c[1], $c[2]]);
     }
     $pdo->prepare("UPDATE problems SET current_version_id = ? WHERE id = ?")->execute([$verId, $problemId]);
+    AuditLog::record($pdo, $user, 'problem.create', 'problem', $problemId, ['version_number' => 1, 'source' => 'ai']);
     $pdo->commit();
+    $ownsTransaction = false;
 
     echo json_encode(['ok' => true, 'problem_id' => $problemId, 'slug' => $slug,
         'edit_url' => url('/frontend/instructor/problem_form.php?edit=' . $problemId)], JSON_UNESCAPED_UNICODE);
-} catch (Exception $e) {
-    if ($pdo->inTransaction()) $pdo->rollBack();
+} catch (Throwable $e) {
+    if ($ownsTransaction && $pdo->inTransaction()) $pdo->rollBack();
     http_response_code(400);
     echo json_encode(['ok' => false, 'error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
 }

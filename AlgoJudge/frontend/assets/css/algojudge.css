@@ -10,6 +10,10 @@
     --cl-text: #1e293b;
     --cl-muted: #64748b;
     --cl-border: #e2e8f0;
+    --cl-control-border: #64748b;
+    --cl-control-hover: #eef2ff;
+    --cl-control-active: #e0e7ff;
+    --cl-focus: #2c31cf;
     --cl-ac: #10b981;
     --cl-wa: #ef4444;
     --cl-tle: #f59e0b;
@@ -464,12 +468,51 @@ html.sb-collapsed .sb:not(:hover):not(.hovering) .sb-dot { display: none; }
     gap: 6px;
     text-decoration: none;
 }
+/* Author display rules must not override native hidden controls in multi-step forms. */
+.btn[hidden] { display: none; }
 .btn-primary { background: var(--cl-primary); color: #fff; }
 .btn-primary:hover { background: var(--cl-primary-hover); }
 .btn-success { background: #10b981; color: #fff; }
 .btn-success:hover { background: #059669; }
 .btn-outline { background: transparent; border: 1px solid #45475a; color: #cdd6f4; }
 .btn-outline:hover { background: #313244; }
+
+/* Framed controls for light pages; keep .btn-outline for dark IDE surfaces.
+   These variants intentionally do not set display (wizard controls may be hidden). */
+.btn-secondary,
+.btn-back {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 10px 16px;
+    border: 1px solid var(--cl-control-border);
+    background: var(--cl-card);
+    color: var(--cl-text);
+    font-family: inherit;
+    line-height: 1.4;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    justify-content: center;
+}
+.btn-secondary:hover,
+.btn-back:hover {
+    border-color: var(--cl-primary);
+    background: var(--cl-control-hover);
+    color: var(--cl-primary-hover);
+}
+.btn-secondary:active,
+.btn-back:active {
+    border-color: var(--cl-primary-hover);
+    background: var(--cl-control-active);
+    color: var(--cl-primary-hover);
+}
+.btn-secondary:focus-visible,
+.btn-back:focus-visible {
+    outline: 3px solid var(--cl-focus);
+    outline-offset: 3px;
+    border-color: var(--cl-primary);
+    background: var(--cl-control-hover);
+    color: var(--cl-primary-hover);
+}
 
 /* Trang Đăng nhập & Đăng ký Split Banner */
 .auth-page {
