@@ -18,6 +18,7 @@ try {
     $pending = $begin['pending_source'];
     $route = AIAssistant::route($user, $text, (bool)$hasDraft, !empty($pending));
     $continuing = !empty($route['continue_pending']) && !empty($pending);
+    if ($pending && !$continuing) $store->clearPending($token);
     $pendingRevision = $continuing && !empty($pending['draft_id']);
     if ($pendingRevision) {
         if (!$hasDraft || $pending['draft_id'] !== $existing['id'] || (int)$pending['revision'] !== $existing['revision']) {

@@ -20,6 +20,8 @@ final class ChatbotDraft
 12. Nếu đề chưa nêu mục tiêu tính toán hoặc có mâu thuẫn cốt lõi không giải quyết được, KHÔNG tự chọn mục tiêu. Điền clarification bằng câu hỏi ngắn để người dùng làm rõ; các trường còn lại có thể rỗng. Không hỏi lại chỉ vì thiếu định dạng I/O, giới hạn, mẫu hoặc test; các phần này bạn phải tự bổ sung hợp lý.
 13. Nếu có bản nháp hiện tại và yêu cầu chỉnh sửa: giữ mọi trường đã duyệt không liên quan. Phải cập nhật lại ví dụ và test khi ngữ nghĩa/ràng buộc thay đổi, không để test cũ mâu thuẫn. Trả toàn bộ object; không tự ghi bài, không sinh lệnh execute/SQL.
 14. Không tuyên bố đáp án đã được kiểm chứng bằng thực thi. Người dùng sẽ kiểm tra và bấm Thêm bài sau khi duyệt. Không được thay biến, token hoặc dữ liệu máy chấm bằng bản dịch.
+15. Đánh giá mục tiêu từ TOÀN BỘ đề, không dựa vào danh sách động từ. Chuyển đổi, biểu diễn, biến đổi, mã hóa và các cách diễn đạt khác vẫn là mục tiêu hợp lệ khi đã rõ phép xử lý. Ví dụ chỉ minh họa chứ không đủ để tự đoán quy tắc. Nếu yêu cầu và ví dụ mâu thuẫn cốt lõi, hỏi đúng điểm mâu thuẫn thay vì tự chọn một phía.
+16. Với ví dụ dạng tham số hàm (như tên_biến = giá_trị hoặc chuỗi được đặt trong dấu ngoặc kép để trình bày), chuyển sang stdin/stdout theo định dạng I/O đã chọn và ghi giả định khi cần. Chỉ bỏ nhãn/dấu bao khi đó thực sự là phần trình bày; giữ nguyên nếu chúng thuộc dữ liệu literal. Giữ đúng cặp input/output của mọi ví dụ gốc trong test, không trộn các ví dụ và không đưa phần giải thích vào dữ liệu mẫu.
 PROMPT;
     }
     public static function normalize(array $raw, bool $generated = false): array

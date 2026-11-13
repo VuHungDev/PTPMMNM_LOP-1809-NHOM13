@@ -89,6 +89,14 @@ final class ChatbotStore
             return ['token' => $row['lease_token'], 'draft' => $row['draft'], 'pending_source' => $row['pending_source']];
         });
     }
+    /** A task switch invalidates old clarification even if the new task fails. */
+    public function clearPending(string $token): void
+    {
+        $this->transaction(static function (&$row) use ($token) {
+            if ($row['lease_token'] !== $token) throw new ChatbotError('Yêu cầu đã bị hủy hoặc thay thế.', 'cancelled', 409);
+            $row['pending_source'] = null;
+        });
+    }
     public function heartbeat(string $token): void
     {
         $q = $this->db->prepare('UPDATE chatbot_sessions SET lease_heartbeat=?,updated_at=NOW() WHERE id=? AND lease_token=?');
@@ -162,7 +170,8 @@ final class ChatbotStore
             $this->db->prepare('INSERT INTO chatbot_creations (session_id,user_id,draft_id,revision,save_key,envelope) VALUES (?,?,?,?,?,?)')
                 ->execute([$this->id, $this->actor['id'], $id, $revision, $key, json_encode($d, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)]);
             $row['draft'] = $d;
-            $row['messages'][] = ['role' => 'assistant', 'text' => 'Đã tạo bài #' . $problemId . ': ' . $b['title'], 'links' => [['label' => 'Mở bài vừa tạo', 'url' => $d['edit_url']]]];
+            $row['pending_source'] = null;
+            $row['messages'][] = ['role' => 'assistant', 'text' => 'Đã tạo bài #' . $problemId . ': ' . $b['title'] . '. Bạn có thể gửi đề tiếp theo hoặc hỏi về ứng dụng.', 'links' => [['label' => 'Mở bài vừa tạo', 'url' => $d['edit_url']]]];
             return $d;
         });
     }

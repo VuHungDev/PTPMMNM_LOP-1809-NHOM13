@@ -41,21 +41,16 @@ final class AIAssistant
             if (!$hasDraft) return self::answered('Chưa có bản nháp để chỉnh sửa. Hãy gửi đề bài với yêu cầu tính toán rõ ràng để tạo bản nháp trước; chatbot không sửa bài đã lưu.');
             return ['kind' => 'revise'];
         }
-        if (self::isProblemRequest($text)) {
-            $route = self::draftRoute($staff, $t);
-            // A short answer such as “Tính tổng” may complete the pending goal.
-            // A newly pasted statement (Cho/Given/...) always starts its own source.
-            if ($clarifying && $staff && $route['kind'] === 'draft'
-                && !preg_match('/^(?:(?:de bai|bai toan|problem(?: statement)?)\s*:\s*)?(?:cho\b|(?:you are\s+)?given\b|viet chuong trinh\b|write\s+(?:a\s+)?program\b)/', $t)
-                && !str_contains($t, "\n")) $route['continue_pending'] = true;
-            return $route;
+        // Contextual replies are eligible for semantic evaluation, not proof of a goal.
+        // Full statements and new creation commands must never inherit a pending source.
+        if ($clarifying && $staff && $intent === null && self::isClarificationReply($t)) {
+            return ['kind' => 'draft', 'continue_pending' => true];
         }
+        if (self::isProblemRequest($text)) return self::draftRoute($staff, $t);
 
         if ($intent !== null) return ['kind' => 'query'] + $intent;
         $help = self::knowledge($user, $t);
         if ($help !== null) return ['kind' => 'help'] + $help;
-        // The endpoint owns the pending source. This flag cannot bypass role or safety checks above.
-        if ($clarifying && $staff && preg_match('/\b(?:tong|hieu|tich|thuong|lon nhat|nho nhat|nguyen to|doi xung|dem|sap xep|sum|max|min|prime|sort|count|yes|no)\b/', $t)) return ['kind' => 'draft', 'continue_pending' => true];
         return self::answered(self::outsideScope());
     }
 
@@ -64,11 +59,12 @@ final class AIAssistant
     {
         $t = ChatbotQueries::normalize(trim($text));
         if ($t === '' || self::isGuide($t)) return false;
+        if (preg_match('/^(?:(?:hay|vui long|giup toi|giup minh|please)\s+)*(?:viet|tao|soan|write|create)\s+(?:(?:mot|an?)\s+)?(?:bai\s+(?:tho|hat|van)|tho|truyen|poem|song|essay|story)\b/', $t)) return false;
         if (preg_match('/^(?:tim|xem|tra cuu|liet ke|find|search|show)\s+(?:bai(?:\s+tap)?|problem|exercise|lop|class|bai nop|submission)\b/', $t)) return false;
         if (preg_match('/^(?:(?:hay|vui long|giup toi|giup minh|please)\s+)?(?:them\s+test|add\s+(?:a\s+)?test|cham\s*lai|thu\s*lai|(?:bat|tat|an|hien)\s+bai|tao\s+(?:tai khoan|user|nguoi dung))\b/', $t)) return false;
         if (preg_match('/\b(?:tao|them|soan|sinh|viet|chuan hoa|chat loc|boc tach)\s+(?:(?:giup|cho)\s+(?:toi|minh)\s+)?(?:mot\s+|1\s+)?(?:bai(?:\s*tap)?|de(?:\s*bai)?|problem)\b|\b(?:create|generate|draft)\s+(?:an?\s+)?(?:programming\s+)?(?:problem|exercise)\b|\b(?:dich|translate).*?\b(?:de|bai|problem)\b/', $t)) return true;
         if (count(preg_split('/\r\n|\r|\n/', $t)) >= 3 && preg_match('/\b(input|output|stdin|dau vao|dau ra|vi du)\b/', $t)) return true;
-        return (bool)preg_match('/(?:^|[\r\n.!?:]\s*)(?:(?:de bai|bai toan)\s*:\s*)?(?:cho\s+(?:hai|ba|mot|so|mang|day|chuoi|do thi|cay|n\b|[a-z]\b)|(?:you are\s+)?given\s+|(?:hay\s+)?(?:tinh|tim|kiem tra)\s+|viet\s+chuong trinh|write\s+(?:a\s+)?program|your task is\s+|(?:calculate|compute|find)\s+(?:the\s+)?)/', $t);
+        return self::startsStatement($t) || (bool)preg_match('/(?:^|[\r\n.!?:]\s*)(?:(?:de bai|bai toan)\s*:\s*)?(?:cho\s+(?:hai|ba|mot|so|mang|day|chuoi|do thi|cay|n\b|[a-z]\b)|(?:you are\s+)?given\s+|(?:hay\s+)?(?:tinh|tim|kiem tra)\s+|viet\s+chuong trinh|write\s+(?:a\s+)?program|your task is\s+|(?:calculate|compute|find)\s+(?:the\s+)?)/', $t);
     }
 
     /** Deterministic Vietnamese help. Links are verified, app-relative routes, not provider output. */
@@ -119,12 +115,49 @@ final class AIAssistant
     private static function draftRoute(bool $staff, string $t): array
     {
         if (!$staff) return self::answered('Tạo và chỉnh sửa bản nháp bài tập chỉ dành cho giáo viên hoặc quản trị viên. Học viên có thể hỏi cách dùng ứng dụng và tra cứu bài tập, bài nộp, tiến độ của chính mình; tôi không giải hộ bài.');
-        // Missing formatting can be completed later; a missing computational goal must not be invented.
-        $t = preg_replace('/\btinh toan\b|\b(?:tinh|tim|kiem tra|dem)\s+(?:gi do|gi|cai gi)\b|\b(?:sample\s+)?(?:input|output|stdin|stdout)\s*[:：]?[^\r\n]*/', '', $t);
-        if (!preg_match('/\b(?:tinh|tim|kiem tra|dem|sap xep|in\s+(?:ra|chuoi|dong|so|hello|loi)|xuat|tong|hieu|tich|thuong|lon nhat|nho nhat|nguyen to|doi xung|phan tu|giai phuong trinh|calculate|compute|find|check|count|sort|print|output\s+\w+|sum|maximum|minimum|prime|palindrome|return\s+\w+)\b/', $t)) {
+        // Only recognize narrowly obvious empty/topic/input-only requests locally.
+        // Unknown wording is NOT a missing goal: the existing generator evaluates the
+        // complete original statement and returns either a draft or clarification.
+        if (self::obviouslyMissingGoal($t)) {
             return self::answered('Bạn muốn bài toán yêu cầu tính, tìm, kiểm tra hoặc in kết quả gì? Hãy nêu mục tiêu cốt lõi (ví dụ: tính tổng các phần tử của mảng). Tôi có thể bổ sung định dạng Input/Output, ví dụ và test sau khi mục tiêu rõ ràng.') + ['needs_clarification' => true];
         }
         return ['kind' => 'draft'];
+    }
+
+    /** Eligibility signals only, never a whitelist of all valid computational goals. */
+    private static function startsStatement(string $t): bool
+    {
+        return (bool)preg_match('/^(?:(?:de bai|bai toan|problem(?: statement)?)\s*:\s*)?(?:cho\s+|(?:you are\s+)?given\s+|viet\s+chuong trinh\b|write\s+(?:a\s+)?program\b|your task is\s+|(?:convert|transform|encode|decode|represent|map|reverse|rotate|merge|split|replace|remove|calculate|compute|find|check|count|sort|print)\s+(?:(?:an?|the)\s+)?(?:integer|number|string|array|sequence|matrix|graph|tree|each|all|every)\b|(?:hay\s+)?(?:chuyen doi|bieu dien|ma hoa|giai ma|dao nguoc|xoay|gop|tach)\s+(?:mot\s+)?(?:so|chuoi|mang|day|ma tran|do thi)\b)/', $t);
+    }
+
+    private static function isClarificationReply(string $t): bool
+    {
+        if (str_contains($t, "\n") || mb_strlen($t) > 500 || self::startsCreation($t) || self::startsStatement($t)) return false;
+        // Accept contextual task expressions, not every unknown message just because
+        // a question is pending. The model still must resolve the goal from source.
+        return (bool)preg_match('/^(?:(?:hay|vui long|please)\s+)?(?:tinh|tim|kiem tra|dem|sap xep|in|xuat|chuyen doi|bieu dien|ma hoa|giai ma|dao nguoc|xoay|gop|tach|convert|transform|represent|encode|decode|reverse|rotate|merge|split|replace|remove|calculate|compute|find|check|count|sort|print|return)\b|^(?:tong|hieu|tich|thuong|lon nhat|nho nhat|nguyen to|doi xung|sum|max|min|maximum|minimum|prime|palindrome|yes|no)\b|^(?:sang|thanh|to|into|as)\s+\S+/', $t);
+    }
+
+    private static function obviouslyMissingGoal(string $t): bool
+    {
+        // Discard sample sections only at a heading boundary, never an arbitrary
+        // occurrence of "input"/"output" inside a computational requirement.
+        $parts = preg_split('/(?=^\h*(?:#{1,6}\h*)?(?:(?:sample\h+)?(?:input|output|stdin|stdout)|dau vao|dau ra|vi du)\h*(?:[:：][^\r\n]*|)\h*$)/m', $t, 2);
+        if (isset($parts[1])) {
+            $tail = preg_replace('/^\h*(?:#{1,6}\h*)?(?:(?:sample\h+)?(?:input|output|stdin|stdout)|dau vao|dau ra|vi du|examples?)\h*(?:#?\d+)?\h*[:：]?/m', '', $parts[1]);
+            // A requirement can appear AFTER the samples. Only strip a tail made
+            // entirely of numeric/punctuation data; unknown prose goes to the model.
+            if (preg_match('/\p{L}/u', $tail)) return false;
+        }
+        $prose = trim($parts[0]);
+        $prose = preg_replace('/^(?:(?:hay|vui long|giup toi|giup minh|toi muon|please|can you)\s+)*(?:tao|them|soan|sinh|viet|create|generate|draft)\s+(?:(?:giup|cho)\s+(?:toi|minh)\s+)?(?:(?:mot|1|an?|programming)\s+)*(?:bai(?:\s*tap)?|de(?:\s*bai)?|problem|exercise)\b\s*/', '', $prose);
+        $prose = trim($prose, " \t\r\n.:：!?");
+        if ($prose === '' || preg_match('/^(?:noi dung\s+)?(?:de bai|bai toan|problem(?: statement)?)$/', $prose)) return true;
+        $topic = '(?:mang|chuoi|day so|so nguyen|so hoc|do thi|cay|arrays?|strings?|integers?|numbers?|graphs?|trees?)';
+        if (preg_match('/^(?:(?:tinh toan\s+)?(?:ve|chu de|about|on)\s+)?' . $topic . '$/', $prose)) return true;
+        // Exact input-only fragments are safe to clarify; longer/unknown prose is
+        // deliberately delegated, even when it contains no familiar action word.
+        return (bool)preg_match('/^(?:cho\s+(?:(?:hai|ba|mot|n|[0-9]+)\s+)?(?:so nguyen(?:\s+[a-z](?:\s*(?:,|va)\s*[a-z])*)?|mang(?:\s+so nguyen)?|chuoi(?:\s+[a-z])?)|(?:you are\s+)?given\s+(?:(?:an?|two|three|n)\s+)?(?:integers?(?:\s+[a-z](?:\s*(?:,|and)\s*[a-z])*)?|an?\s+array\s+of\s+integers|string))$/', $prose);
     }
 
     private static function requestsPrivateData(string $t): bool

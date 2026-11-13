@@ -29,6 +29,9 @@ function envelope(changes = {}) {
             assumptions: ['Chọn số nguyên.'], warnings: [] }, ...changes
     };
 }
+function savedEnvelope(changes = {}) {
+    return envelope({ status: 'saved', revision: 5, problem_id: 8, edit_url: '/AlgoJudge/frontend/instructor/problem_form.php?edit=8', ...changes });
+}
 
 // Small native-DOM double: writes to innerHTML are forbidden, just as in the app.
 class Element {
@@ -222,16 +225,142 @@ test('server normalization after sync clears acknowledgement and requires fresh 
     queue.push(json({ ok: true, draft: envelope({ revision: 5, semantic_review: true, data }) }));
     await bot.review(); assert.equal(calls.length, 1); assert.equal(refs.reviewed.checked, false); assert.match(refs['notice-text'].textContent, /chuẩn hóa/); assert.equal(refs.save.disabled, true);
 });
-test('saying OK never saves; explicit save uses revision and same server idempotency key on retry', async () => {
+test('saying OK never saves; ambiguous save reconciles before retrying the same idempotency key', async () => {
     const { bot, refs, queue, calls } = boot(); bot.acceptDraft(envelope()); refs.input.value = 'OK'; queue.push(answer('Bản nháp vẫn chờ bấm nút Thêm bài.'));
     await bot.send(); assert.equal(calls.length, 1); assert.ok(calls[0].url.endsWith('/ai_chat.php'));
+    refs.input.value = 'Câu hỏi chưa gửi';
     queue.push(() => Promise.reject(new TypeError('offline')));
     assert.equal(await bot.save(), false); assert.equal(bot.state.draft.status, 'review'); assert.equal(bot.state.local.title, 'Tổng hai số');
-    const saved = envelope({ status: 'saved', revision: 5, problem_id: 8, edit_url: '/AlgoJudge/frontend/instructor/problem_form.php?edit=8' });
-    queue.push(json({ ok: true, draft: saved, problem_id: 8, edit_url: saved.edit_url }));
+    assert.equal(refs.draft.hidden, false); assert.equal(bot.state.recoveryRequired, true); assert.equal(refs.save.disabled, true); assert.equal(refs.send.disabled, true);
+    assert.match(refs['notice-text'].textContent, /bài có thể đã được tạo/); assert.equal(refs.input.value, 'Câu hỏi chưa gửi');
+    assert.equal(await bot.save(), false); assert.equal(await bot.send(), false); assert.equal(calls.length, 2);
+    queue.push(json({ ok: true, messages: [], draft: envelope(), processing: false }));
+    assert.equal(await bot.restore(false), true); assert.equal(bot.state.recoveryRequired, false);
+    const saved = savedEnvelope(); queue.push(json({ ok: true, draft: saved, problem_id: 8, edit_url: saved.edit_url }));
     assert.equal(await bot.save(), true);
-    assert.deepEqual(calls[1].data, { draft_id: 'draft-1', revision: 4, idempotency_key: 'stable-save-key' }); assert.deepEqual(calls[2].data, calls[1].data);
-    assert.equal(bot.state.draft.status, 'saved'); assert.equal(refs.save.disabled, true); assert.match(refs.messages.textContent, /Đã tạo bài #8/);
+    assert.deepEqual(calls[1].data, { draft_id: 'draft-1', revision: 4, idempotency_key: 'stable-save-key' }); assert.deepEqual(calls[3].data, calls[1].data);
+    assert.equal(bot.state.draft, null); assert.equal(refs.draft.hidden, true); assert.equal(refs.save.disabled, true); assert.match(refs.messages.textContent, /Đã tạo bài #8/);
+    assert.equal(refs.input.value, 'Câu hỏi chưa gửi');
+});
+for (const floating of [false, true]) test('confirmed save retires preview and readies composer without generating another draft (' + (floating ? 'widget' : 'page') + ')', async () => {
+    const { bot, refs, queue, calls, doc } = boot({ floating }); refs.panel.hidden = false;
+    bot.acceptDraft(envelope()); refs.reviewed.checked = true; refs.input.value = 'Yêu cầu tiếp theo chưa gửi';
+    bot.stageField({ field: 'title', value: 'Nội dung tạm' });
+    const gate = deferred(); queue.push(() => gate.promise);
+    const running = bot.save(); await tick();
+    assert.equal(refs.draft.hidden, false, 'save click alone must not retire preview'); assert.equal(refs.input.disabled, true);
+    gate.resolve(json({ ok: true, draft: savedEnvelope(), problem_id: 8 }));
+    assert.equal(await running, true); assert.equal(calls.length, 1); assert.ok(calls[0].url.endsWith('/ai_create_problem.php'));
+    assert.equal(calls[0].credentials, 'same-origin'); assert.equal(calls[0].headers['X-CSRF-Token'], 'csrf-fixture');
+    assert.equal(refs.draft.hidden, true); assert.equal(refs['draft-editor'].children.length, 0); assert.equal(bot.controls.size, 0);
+    assert.equal(bot.state.draft, null); assert.equal(bot.state.local, null); assert.equal(bot.state.baseline, null); assert.equal(bot.state.dirty, false);
+    assert.equal(bot.isReview(), null); assert.equal(refs.staging.hidden, true); assert.equal(bot.staged.size, 0);
+    assert.equal(refs.reviewed.checked, false); assert.equal(refs.save.disabled, true); assert.equal(refs.cancel.disabled, true);
+    assert.equal(refs.send.disabled, false); assert.equal(refs.input.disabled, false); assert.equal(doc.activeElement, refs.input);
+    assert.equal(refs.input.value, 'Yêu cầu tiếp theo chưa gửi');
+    assert.match(refs.messages.textContent, /Đã tạo bài #8 thành công/);
+    const link = refs.messages.querySelector('a'); assert.equal(link.textContent, 'Mở bài vừa tạo'); assert.equal(link.getAttribute('href'), savedEnvelope().edit_url);
+    assert.equal(await bot.save(), false); assert.equal(calls.length, 1, 'no automatic save, empty draft or generation');
+    queue.push(answer('Hướng dẫn xem bài nộp.')); refs.input.value = 'Cách xem bài nộp?';
+    assert.equal(await bot.send(), true); assert.deepEqual(calls[1].data, { text: 'Cách xem bài nộp?' });
+    assert.equal(refs.draft.hidden, true); assert.equal(bot.state.draft, null);
+    const next = envelope({ id: 'draft-2', revision: 1, save_key: 'next-key', data: { ...envelope().data, title: 'Tích hai số' } });
+    queue.push(stream(frame('field', { field: 'title', value: 'Tích hai số' }) + frame('draft', { draft: next }) + frame('done', { ok: true })));
+    refs.input.value = 'Soạn bài tính tích hai số'; assert.equal(await bot.send(), true);
+    assert.deepEqual(calls[2].data, { text: 'Soạn bài tính tích hai số' }); assert.equal(calls.length, 3);
+    assert.equal(bot.state.draft.id, 'draft-2'); assert.equal(refs.draft.hidden, false); assert.equal(bot.controls.get('title').input.value, 'Tích hai số');
+    assert.equal(refs.save.disabled, false); assert.match(refs.messages.textContent, /Đã tạo bài #8/);
+});
+for (const persistedReceipt of [false, true]) test('saved restore/reload stays hidden with receipt and no active chat draft (' + (persistedReceipt ? 'persisted receipt' : 'envelope receipt') + ')', async () => {
+    const { bot, refs, queue, calls } = boot(); const saved = savedEnvelope(); refs.input.value = 'Chưa gửi';
+    const messages = persistedReceipt ? [{ role: 'assistant', text: 'Đã tạo bài #8: Tổng hai số', links: [{ label: 'Mở bài vừa tạo', url: saved.edit_url }] }] : [];
+    const state = { ok: true, messages, draft: saved, processing: false };
+    queue.push(json(state)); assert.equal(await bot.restore(false), true);
+    assert.equal(bot.state.draft, null); assert.equal(bot.state.local, null); assert.equal(refs.draft.hidden, true); assert.equal(bot.controls.size, 0);
+    assert.equal(refs['draft-editor'].children.length, 0); assert.equal(refs.send.disabled, false); assert.equal(refs.input.value, 'Chưa gửi');
+    assert.equal((refs.messages.textContent.match(/Đã tạo bài #8/g) || []).length, 1); assert.equal(refs.messages.querySelector('a').getAttribute('href'), saved.edit_url);
+    queue.push(json(state)); await bot.restore(false);
+    assert.equal((refs.messages.textContent.match(/Đã tạo bài #8/g) || []).length, 1, 'restore must not duplicate persisted receipt');
+    queue.push(answer()); refs.input.value = 'Cách dùng ứng dụng?'; assert.equal(await bot.send(), true);
+    assert.deepEqual(calls[2].data, { text: 'Cách dùng ứng dụng?' }); assert.equal(refs.draft.hidden, true);
+});
+test('ambiguous save restored as saved closes preview without a second create request', async () => {
+    const { bot, refs, queue, calls } = boot(); bot.acceptDraft(envelope()); refs.input.value = 'Giữ nội dung chưa gửi';
+    queue.push(() => Promise.reject(new TypeError('response lost'))); assert.equal(await bot.save(), false);
+    queue.push(json({ ok: true, messages: [], draft: savedEnvelope(), processing: false }));
+    assert.equal(await bot.restore(false), true); assert.equal(bot.state.draft, null); assert.equal(refs.draft.hidden, true);
+    assert.equal(bot.state.recoveryRequired, false); assert.equal(refs.send.disabled, false); assert.equal(refs.input.value, 'Giữ nội dung chưa gửi');
+    assert.equal(calls.filter(call => call.url.endsWith('/ai_create_problem.php')).length, 1); assert.match(refs.messages.textContent, /Đã tạo bài #8/);
+});
+for (const failure of ['invalid JSON', 'missing saved envelope', 'wrong draft', 'wrong revision', 'wrong key', 'missing problem', 'mismatched problem', 'server failure']) test('uncertain save retains review and requires reconciliation: ' + failure, async () => {
+    const { bot, refs, queue, calls } = boot(); bot.acceptDraft(envelope()); refs.reviewed.checked = true; refs.input.value = 'Chưa gửi';
+    const bad = {
+        'invalid JSON': () => new Response('{broken', { headers: { 'Content-Type': 'application/json' } }),
+        'missing saved envelope': () => json({ ok: true, problem_id: 8 }),
+        'wrong draft': () => json({ ok: true, draft: savedEnvelope({ id: 'another-draft' }) }),
+        'wrong revision': () => json({ ok: true, draft: savedEnvelope({ revision: 3 }) }),
+        'wrong key': () => json({ ok: true, draft: savedEnvelope({ save_key: 'another-key' }) }),
+        'missing problem': () => json({ ok: true, draft: savedEnvelope({ problem_id: undefined }) }),
+        'mismatched problem': () => json({ ok: true, problem_id: 9, draft: savedEnvelope() }),
+        'server failure': () => json({ ok: false, error: 'Internal error' }, 500)
+    };
+    queue.push(bad[failure]()); assert.equal(await bot.save(), false);
+    assert.equal(bot.state.draft.status, 'review'); assert.equal(bot.state.draft.save_key, 'stable-save-key');
+    assert.equal(refs.draft.hidden, false); assert.equal(bot.controls.get('title').input.value, 'Tổng hai số'); assert.equal(refs.reviewed.checked, true);
+    assert.equal(bot.state.recoveryRequired, true); assert.equal(refs.save.disabled, true); assert.equal(refs.send.disabled, true); assert.equal(refs.restore.disabled, false);
+    assert.equal(refs.input.value, 'Chưa gửi'); assert.match(refs['notice-text'].textContent, /Khôi phục trạng thái/); assert.doesNotMatch(refs.messages.textContent, /Đã tạo bài #8/);
+    assert.equal(await bot.save(), false); assert.equal(await bot.send(), false); assert.equal(calls.length, 1);
+});
+test('old saved receipt cannot replace or hide a newer unrelated draft, even with dirty edits', async () => {
+    for (const dirty of [false, true]) {
+        const { bot, refs } = boot(); bot.acceptDraft(envelope({ id: 'draft-2', revision: 1, save_key: 'new-key' }));
+        if (dirty) edit(bot, 'description', 'Nội dung mới chưa đồng bộ');
+        const current = bot.state.draft, local = bot.state.local, control = bot.controls.get('title').input;
+        refs.reviewed.checked = true; bot.stageField({ field: 'title', value: 'Bản mới đang soạn' });
+        bot.acceptDraft(savedEnvelope()); bot.acceptDraft(savedEnvelope());
+        assert.equal(bot.state.draft, current); assert.equal(bot.state.local, local); assert.equal(bot.controls.get('title').input, control);
+        assert.equal(refs.draft.hidden, false); assert.equal(bot.state.dirty, dirty); assert.equal(refs.reviewed.checked, true); assert.equal(refs.staging.hidden, false);
+        if (dirty) assert.equal(bot.controls.get('description').input.value, 'Nội dung mới chưa đồng bộ');
+        assert.equal((refs.messages.textContent.match(/Đã tạo bài #8/g) || []).length, 1); assert.equal(bot.state.conflict, false);
+    }
+});
+test('late save receipt preserves a newer unrelated active draft and its unsent text', async () => {
+    const { bot, refs, queue } = boot(); bot.acceptDraft(envelope()); const gate = deferred(); queue.push(() => gate.promise);
+    const running = bot.save(); await tick();
+    bot.acceptDraft(envelope({ id: 'draft-2', revision: 1, save_key: 'new-key' })); edit(bot, 'title', 'Tiêu đề mới chưa đồng bộ'); refs.input.value = 'Đừng xóa câu này';
+    gate.resolve(json({ ok: true, draft: savedEnvelope() })); assert.equal(await running, true);
+    assert.equal(bot.state.draft.id, 'draft-2'); assert.equal(bot.state.dirty, true); assert.equal(refs.draft.hidden, false);
+    assert.equal(bot.controls.get('title').input.value, 'Tiêu đề mới chưa đồng bộ'); assert.equal(refs.input.value, 'Đừng xóa câu này');
+    assert.equal(refs.send.disabled, false); assert.match(refs.messages.textContent, /Đã tạo bài #8/);
+});
+test('save sync failure preserves dirty review inputs and never calls create', async () => {
+    const { bot, refs, queue, calls } = boot(); bot.acceptDraft(envelope()); edit(bot, 'slug', 'slug-chua-dong-bo'); refs.input.value = 'Giữ câu hỏi';
+    refs.reviewed.checked = true;
+    queue.push(json({ ok: false, error: 'Slug không hợp lệ.', code: 'validation', fields: { slug: 'Cần sửa slug' } }, 422));
+    assert.equal(await bot.save(), false); assert.equal(calls.length, 1); assert.ok(calls[0].url.endsWith('/ai_draft.php'));
+    assert.equal(bot.state.dirty, true); assert.equal(bot.controls.get('slug').input.value, 'slug-chua-dong-bo');
+    assert.equal(refs.draft.hidden, false); assert.equal(refs.reviewed.checked, true); assert.equal(refs.input.value, 'Giữ câu hỏi');
+    assert.equal(bot.state.recoveryRequired, false); assert.equal(refs.save.disabled, false);
+});
+test('save HTTP409 retains review and gates actions for explicit recovery', async () => {
+    const { bot, refs, queue } = boot(); bot.acceptDraft(envelope()); refs.reviewed.checked = true; refs.input.value = 'Chưa gửi';
+    queue.push(json({ ok: false, code: 'revision_conflict', error: 'Phiên bản đã đổi.' }, 409));
+    assert.equal(await bot.save(), false); assert.equal(refs.draft.hidden, false); assert.equal(bot.state.draft.revision, 4);
+    assert.equal(refs.reviewed.checked, true); assert.equal(refs.input.value, 'Chưa gửi'); assert.equal(bot.state.conflict, true);
+    assert.equal(refs.backups.hidden, false); assert.equal(refs.save.disabled, true); assert.equal(refs.send.disabled, true);
+});
+test('saved restore receipt cannot hide an unrelated active draft', async () => {
+    const { bot, refs, queue } = boot(); bot.acceptDraft(envelope({ id: 'draft-2', revision: 1, save_key: 'new-key' }));
+    edit(bot, 'title', 'Bản mới cần giữ'); bot.requestRestore();
+    queue.push(json({ ok: true, messages: [], draft: savedEnvelope(), processing: false }));
+    assert.equal(await bot.restore(true), true); assert.equal(bot.state.draft.id, 'draft-2'); assert.equal(refs.draft.hidden, false);
+    assert.equal(bot.controls.get('title').input.value, 'Bản mới cần giữ'); assert.equal(bot.state.dirty, true);
+    assert.match(refs.messages.textContent, /Đã tạo bài #8/); assert.equal(refs.backups.hidden, false);
+});
+test('saved receipt renders unsafe text literally and rejects an unsafe edit link', async () => {
+    const { bot, refs } = boot(); bot.acceptDraft(savedEnvelope({ edit_url: 'javascript:alert(1)', data: { ...envelope().data, title: '<img src=x onerror=alert(1)>' } }));
+    assert.equal(refs.draft.hidden, true); assert.equal(bot.state.draft, null); assert.match(refs.messages.textContent, /Đã tạo bài #8/);
+    assert.equal(refs.messages.querySelectorAll('a').length, 0); assert.equal(refs['draft-editor'].children.length, 0);
 });
 test('pending nonsemantic edits sync before explicit save', async () => {
     const { bot, queue, calls } = boot(); bot.acceptDraft(envelope()); edit(bot, 'slug', 'tong-da-sua');
@@ -240,9 +369,11 @@ test('pending nonsemantic edits sync before explicit save', async () => {
     await bot.save(); assert.equal(calls[0].data.action, 'update'); assert.equal(calls[1].data.revision, 5); assert.equal(calls[1].data.idempotency_key, 'updated-key');
 });
 test('save validation errors preserve data and mark precise fields', async () => {
-    const { bot, refs, queue } = boot(); bot.acceptDraft(envelope());
+    const { bot, refs, queue } = boot(); bot.acceptDraft(envelope()); refs.reviewed.checked = true; refs.input.value = 'Câu hỏi chưa gửi';
     queue.push(json({ ok: false, error: 'Test sai.', code: 'validation', fields: { 'test_cases.1.expected': 'Output chưa đúng' } }, 422));
     await bot.save(); assert.equal(bot.state.draft.status, 'review'); assert.equal(bot.controls.get('test_cases.1.expected').input.value, '0');
+    assert.equal(refs.draft.hidden, false); assert.equal(refs.reviewed.checked, true); assert.equal(refs.input.value, 'Câu hỏi chưa gửi');
+    assert.equal(bot.state.recoveryRequired, false); assert.equal(refs.save.disabled, false); assert.equal(refs.send.disabled, false);
     assert.equal(bot.controls.get('test_cases.1.expected').input.getAttribute('aria-invalid'), 'true'); assert.match(refs.errors.textContent, /Output chưa đúng/);
 });
 test('one operation lock prevents concurrent send, sync, review and save', async () => {

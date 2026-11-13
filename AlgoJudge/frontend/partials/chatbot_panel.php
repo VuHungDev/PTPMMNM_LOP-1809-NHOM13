@@ -115,4 +115,4 @@ $chatbotStaff = in_array($user['role'] ?? '', ['teacher', 'admin'], true);
         <noscript><p class="chatbot-noscript">Cần bật JavaScript để sử dụng trợ lý.</p></noscript>
     </section>
 </div>
-<script src="<?= e(url('/frontend/assets/js/modules/chatbot.js')) ?>?v=20261113-1" defer></script>
+<script src="<?= e(url('/frontend/assets/js/modules/chatbot.js')) ?>?v=20261114-1" defer></script>

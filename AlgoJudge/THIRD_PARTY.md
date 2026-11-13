@@ -1,6 +1,6 @@
 # THIRD_PARTY — Ghi nguồn tái sử dụng
 
-## 1. Mã nhóm tự viết (100% trong repo này, không kể `sandbox/nodejs/node_modules/`)
+## 1. Mã nhóm viết
 
 - `backend/lib/JudgeEngine.php`, `JudgeQueue.php` — điều phối chấm, so sánh output, tổng hợp 6 ngôn ngữ
 - `backend/lib/Auth.php`, `backend/config/bootstrap.php`, `backend/config/ai.php` — phân quyền, kết nối CSDL, cấu hình AI
@@ -21,7 +21,7 @@
 | PHPMailer (`phpmailer/phpmailer`, yêu cầu `^6.9`) | https://github.com/PHPMailer/PHPMailer / Packagist | LGPL-2.1 | `backend/lib/Mailer.php` — gửi OTP qua SMTP; khai báo trong `composer.json`, cần cài dependency trước khi dùng |
 | Toolchain chấm bài: Python, GCC/G++ (MSYS2 ucrt64), JDK (`javac`/`java`), Node.js, PHP | python.org, msys2.org, oracle.com/openjdk, nodejs.org, php.net | PSF / GPL+runtime-exception / GPL+Classpath / MIT / PHP License | `backend/lib/JudgeEngine.php` gọi qua CLI cách ly |
 | MariaDB/MySQL (XAMPP) | mariadb.org / apachefriends.org | GPL v2 | Lưu trữ toàn bộ dữ liệu |
-| Google Gemini API (`gemini-3.8-flash`) | ai.google.dev | Điều khoản Google API (dịch vụ ngoài, key do người dùng tự cấp) | `backend/lib/AIHelper.php` — bóc tách đề, chat trợ lý |
+| Google Gemini API (`gemini-3.5-flash`, có thể đổi bằng `AI_MODEL`) | ai.google.dev | Điều khoản Google API (dịch vụ ngoài, key do người dùng tự cấp) | `backend/lib/AIStream.php`, `backend/lib/AIHelper.php` — stream bản nháp và bóc tách đề |
 | Thư viện Python có sẵn: numpy, pandas, networkx, nltk, pyjwt, cryptography, Pillow, lxml, beautifulsoup4, Flask, sortedcontainers, requests, scikit-learn, matplotlib, scipy, sympy | PyPI | BSD / MIT / Apache-2.0 (theo từng gói) | Máy chấm — `import` trực tiếp trong code |
 | Gói Node sandbox: lodash, mathjs, dayjs, big.js, seedrandom (+ phụ thuộc trong `node_modules/`, không phải mã của nhóm) | npm | MIT | `backend/sandbox/nodejs/` — `require()` trực tiếp trong code JS |
 | Extension PHP bật thêm: gd, intl, gmp, sockets, soap, sodium, sqlite3, tidy, xsl | php.net / XAMPP | PHP License | `C:\xampp\php\php.ini` — dùng trong code PHP |

@@ -150,6 +150,7 @@
         if (!value || typeof value !== 'object' || typeof value.id !== 'string' || !value.id ||
             !Number.isSafeInteger(value.revision) || value.revision < 0 ||
             !['review', 'saved', 'cancelled'].includes(value.status) || !value.data || typeof value.data !== 'object' ||
+            (value.status === 'saved' && (!Number.isSafeInteger(value.problem_id) || value.problem_id < 1)) ||
             typeof value.semantic_review !== 'boolean' || typeof value.save_key !== 'string') {
             throw new ChatbotError('Bản nháp máy chủ không đúng định dạng. Bản đang nhập vẫn được giữ.', 'invalid_draft');
         }
@@ -186,6 +187,7 @@
                 controller: null, stopRequested: false, stopPromise: null };
             this.controls = new Map();
             this.staged = new Map();
+            this.savedReceipts = new Set();
             this.lastBackup = '';
             this.sequence = 0;
             this.ready = Promise.resolve();
@@ -336,8 +338,7 @@
             this.refs['review-area'].hidden = !active;
             if (s.draft) {
                 this.refs['draft-revision'].textContent = 'Phiên bản ' + s.draft.revision;
-                this.refs['draft-status'].textContent = s.draft.status === 'saved' ? 'Đã tạo bài. Bản nháp này chỉ đọc, không thể tạo lặp.'
-                    : s.draft.status === 'cancelled' ? 'Đã hủy. Bản nháp này chỉ đọc, chưa tạo bài.'
+                this.refs['draft-status'].textContent = s.draft.status === 'cancelled' ? 'Đã hủy. Bản nháp này chỉ đọc, chưa tạo bài.'
                     : s.conflict ? 'Có phiên bản mới trên máy chủ. Các ô đang sửa vẫn được giữ; hãy sao chép và khôi phục trước khi tiếp tục.'
                     : s.dirty ? 'Có chỉnh sửa chưa đồng bộ. Sẽ đồng bộ trước khi gửi yêu cầu tiếp theo; chưa tạo bài tập.'
                     : this.needsReview() ? 'Cần đối chiếu ví dụ/test và duyệt chỉnh sửa trước khi thêm bài.'
@@ -383,6 +384,8 @@
                 if (this.refs['staging-fields']) this.refs['staging-fields'].replaceChildren();
                 this.controls.clear();
                 this.staged.clear();
+                this.savedReceipts.clear();
+                if (this.refs.saved) this.refs.saved.replaceChildren();
                 this.lastBackup = '';
                 this.state.draft = this.state.local = this.state.baseline = null;
                 message = 'Phiên đăng nhập không còn hợp lệ. Vui lòng tải lại trang và đăng nhập để tiếp tục.';
@@ -474,6 +477,7 @@
                 // Validate everything before replacing any local state.
                 const draft = this.staff && body.draft ? validateEnvelope(body.draft) : null;
                 this.refs.messages.replaceChildren();
+                this.savedReceipts.clear();
                 body.messages.forEach(message => {
                     if (message && ['user', 'assistant'].includes(message.role) && typeof message.text === 'string') this.addMessage(message.role, message.text, message.links);
                 });
@@ -487,12 +491,7 @@
                 this.refs.recovery.hidden = true;
                 this.clearNotice();
                 if (draft) this.acceptDraft(draft, { force: true });
-                else if (this.staff) {
-                    s.draft = s.local = s.baseline = null;
-                    s.dirty = s.semanticDirty = false;
-                    this.refs.draft.hidden = true;
-                    this.controls.clear();
-                }
+                else if (this.staff) this.clearDraft();
                 if (this.staff) this.refs.staging.hidden = true;
                 this.status(body.processing ? 'Yêu cầu trước vẫn đang xử lý trên máy chủ. Khôi phục lại để xem kết quả, hoặc chọn Dừng chờ.' : 'Đã khôi phục trạng thái từ máy chủ');
                 return true;
@@ -502,10 +501,58 @@
                 return false;
             } finally { s.operation = ''; this.refresh(); }
         }
+        clearDraft() {
+            const s = this.state;
+            s.draft = s.local = s.baseline = null;
+            s.dirty = s.semanticDirty = s.cancelArmed = false;
+            this.controls.clear();
+            this.refs.draft.hidden = true;
+            this.refs['draft-editor'].replaceChildren();
+            this.refs['draft-revision'].textContent = '';
+            this.refs['draft-status'].textContent = '';
+            this.refs.issues.replaceChildren();
+            this.refs.issues.hidden = true;
+            this.refs.saved.replaceChildren();
+            this.refs.reviewed.checked = false;
+            this.refs['cancel-confirm'].hidden = true;
+            this.staged.clear();
+            this.refs['staging-fields'].replaceChildren();
+            this.refs.staging.hidden = true;
+        }
+        savedReceipt(draft) {
+            const key = draft.id + ':' + draft.problem_id;
+            if (this.savedReceipts.has(key)) return;
+            const text = 'Đã tạo bài #' + draft.problem_id;
+            const url = safeRelativeLink(draft.edit_url);
+            // Restore already includes the server's persisted receipt in history.
+            const existing = Array.from(this.refs.messages.children).some(box => {
+                const content = box.querySelector('.chatbot-message__text');
+                return box.classList.contains('chatbot-message--assistant') && content &&
+                    new RegExp('^' + text + '(?:\\D|$)').test(content.textContent) &&
+                    (!url || Array.from(box.querySelectorAll('a')).some(link => link.getAttribute('href') === url));
+            });
+            if (!existing) this.addMessage('assistant', text + ' thành công. Bạn có thể gửi đề tiếp theo hoặc hỏi về ứng dụng.', [{ label: 'Mở bài vừa tạo', url }]);
+            this.savedReceipts.add(key);
+        }
         acceptDraft(value, options = {}) {
             if (!this.staff) return;
             const next = validateEnvelope(value);
             const s = this.state;
+            if (next.status === 'saved') {
+                // A receipt is not an active draft. An old idempotent save receipt
+                // must never replace another draft (including its dirty inputs).
+                if (s.draft && s.draft.id !== next.id) {
+                    this.savedReceipt(next);
+                    return;
+                }
+                if (!options.force && s.draft && (s.dirty || next.revision < s.draft.revision)) {
+                    throw new ChatbotError('Bản nháp trả về không khớp phiên bản đang xem.', 'revision_conflict', 409);
+                }
+                this.clearDraft();
+                this.savedReceipt(next);
+                this.refresh();
+                return;
+            }
             if (!options.force && (s.dirty || (s.draft && s.draft.id === next.id && next.revision < s.draft.revision))) {
                 throw new ChatbotError('Bản nháp trả về không khớp phiên bản đang xem.', 'revision_conflict', 409);
             }
@@ -526,15 +573,6 @@
             next.issues.forEach(issue => this.refs.issues.appendChild(this.element('li', '', issue)));
             this.refs.issues.hidden = !next.issues.length;
             this.refs.saved.replaceChildren();
-            if (next.status === 'saved') {
-                this.refs.saved.appendChild(this.element('p', '', next.problem_id ? 'Đã tạo bài #' + next.problem_id + '.' : 'Đã tạo bài.'));
-                const url = safeRelativeLink(next.edit_url);
-                if (url) {
-                    const link = this.element('a', '', 'Mở bài vừa tạo');
-                    link.setAttribute('href', url);
-                    this.refs.saved.appendChild(link);
-                }
-            }
             this.refs.draft.hidden = false;
             this.refresh();
         }
@@ -705,9 +743,9 @@
                 this.status(this.needsReview() ? 'Bản nháp vẫn cần duyệt' : 'Đã duyệt cấu trúc và tính nhất quán. Hãy kiểm tra trước khi thêm bài.');
             });
         }
-        save() {
-            if (!this.isReview()) return Promise.resolve(false);
-            return this.run('save', async () => {
+        async save() {
+            if (!this.isReview()) return false;
+            const result = await this.run('save', async () => {
                 await this.syncDraft();
                 const draft = this.state.draft;
                 if (this.needsReview() || draft.issues.length) {
@@ -717,13 +755,31 @@
                 }
                 if (!draft.save_key) throw new ChatbotError('Bản nháp thiếu khóa lưu an toàn. Hãy khôi phục trạng thái.', 'invalid_save_key');
                 this.status('Đang tạo bài từ bản nháp đã duyệt…');
-                const body = await this.json('ai_create_problem.php', { draft_id: draft.id, revision: draft.revision, idempotency_key: draft.save_key });
-                const next = validateEnvelope(body.draft);
-                if (next.status !== 'saved' || next.id !== draft.id) throw new ChatbotError('Máy chủ chưa xác nhận bài đã tạo. Hãy khôi phục trạng thái trước khi thử lại.', 'invalid_save_response');
+                let next;
+                try {
+                    const body = await this.json('ai_create_problem.php', { draft_id: draft.id, revision: draft.revision, idempotency_key: draft.save_key });
+                    next = validateEnvelope(body.draft);
+                    if (next.status !== 'saved' || next.id !== draft.id || next.revision < draft.revision || next.save_key !== draft.save_key ||
+                        (body.problem_id !== undefined && body.problem_id !== next.problem_id)) {
+                        throw new ChatbotError('Máy chủ chưa xác nhận đúng bài đã tạo.', 'invalid_save_response');
+                    }
+                } catch (error) {
+                    // A lost/invalid response can follow a committed save. Keep the
+                    // draft and key, but reconcile before allowing more mutations.
+                    const rejected = error instanceof ChatbotError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.code !== 'invalid_json';
+                    if (!rejected) {
+                        this.state.recoveryRequired = true;
+                        throw new ChatbotError('Chưa xác nhận được kết quả lưu; bài có thể đã được tạo. Bản nháp và khóa lưu vẫn được giữ. Dùng Khôi phục trạng thái trước khi tiếp tục; nếu cần thử lại, dùng cùng khóa lưu để tránh tạo lặp.', 'save_uncertain', error.status || 0);
+                    }
+                    throw error;
+                }
                 this.acceptDraft(next);
-                this.addMessage('assistant', 'Đã tạo bài #' + (body.problem_id || next.problem_id) + ' thành công.', [{ label: 'Mở bài vừa tạo', url: body.edit_url || next.edit_url }]);
-                this.status('Đã tạo bài tập');
+                this.status(this.isReview() ? 'Đã tạo bài tập. Bản nháp hiện hành vẫn được giữ.' : 'Đã tạo bài tập');
             });
+            // The operation lock must be released before focusing. Never overwrite
+            // text already waiting in the composer or reopen a closed widget.
+            if (result && !this.state.draft && !this.refs.input.disabled && !this.refs.panel.hidden) this.refs.input.focus();
+            return result;
         }
         cancelDraft() {
             if (!this.isReview() || !this.state.cancelArmed) return Promise.resolve(false);

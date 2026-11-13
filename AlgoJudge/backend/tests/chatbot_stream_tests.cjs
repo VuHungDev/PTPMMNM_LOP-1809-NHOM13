@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
+const {readFileSync} = require('node:fs');
 const {spawn, execFileSync} = require('node:child_process');
 const root = path.resolve(__dirname, '../..');
 const php = process.env.PHP_BIN || (process.platform === 'win32' ? 'C:/xampp/php/php.exe' : 'php');
@@ -18,6 +19,19 @@ const fixture = {title:'Tổng hai số',slug:'tong-hai-so-stream',topic:'Cơ b�
   test_cases:[{stdin:'2 3',expected:'5',is_public:true,is_boundary:false},
     {stdin:'-100 -100',expected:'-200',is_public:false,is_boundary:true},
     {stdin:'-4 7',expected:'3',is_public:false,is_boundary:false}]};
+const romanSource=readFileSync(path.join(__dirname,'chatbot_roman_statement.txt'),'utf8').trim();
+// A trusted test fixture, not AI output or a production special case.
+const romanFixture={...fixture,title:'Chuyển số nguyên sang số La Mã',slug:'roman-stream',topic:'Số học',
+  description:'Cho số nguyên num. Chuyển num sang số La Mã bằng I, V, X, L, C, D, M và các dạng trừ IV, IX, XL, XC, CD, CM. Giả định bổ sung: 1 ≤ num ≤ 3999.',
+  input_desc:'Một dòng chứa số nguyên num (giả định bổ sung: 1 ≤ num ≤ 3999).',
+  output_desc:'In một dòng chứa biểu diễn La Mã của num; không in nhãn hay dấu ngoặc kép.',
+  sample_input:'3749',sample_output:'MMMDCCXLIX',
+  assumptions:['Bổ sung định dạng stdin là một số nguyên, stdout là chuỗi La Mã.','Bổ sung giới hạn 1 ≤ num ≤ 3999.'],
+  test_cases:[{stdin:'3749',expected:'MMMDCCXLIX',is_public:true,is_boundary:false},
+    {stdin:'58',expected:'LVIII',is_public:false,is_boundary:false},
+    {stdin:'1994',expected:'MCMXCIV',is_public:false,is_boundary:false},
+    {stdin:'1',expected:'I',is_public:false,is_boundary:true},
+    {stdin:'3999',expected:'MMMCMXCIX',is_public:false,is_boundary:true}]};
 let mode='ok',calls=[], app, base, assertions=0;
 function check(condition,label){assert.ok(condition,label);assertions++;console.log('PASS '+label);}
 const provider=http.createServer((req,res)=>{let raw='';req.on('data',d=>raw+=d);req.on('end',()=>{
@@ -26,6 +40,8 @@ const provider=http.createServer((req,res)=>{let raw='';req.on('data',d=>raw+=d)
   if(mode==='quota'){res.writeHead(429);res.end('{"error":"offline-stream-key private-error"}');return;}
   res.writeHead(200,{'Content-Type':'text/event-stream'});
   let output={...fixture};
+  if(mode==='roman')output={...romanFixture};
+  if(mode==='semantic-clarify')output={...fixture,clarification:'Bạn muốn áp dụng quy tắc chuyển đổi cụ thể nào?'};
   if(mode==='clarify')output={...fixture,clarification:'Bạn muốn tính tổng hay tìm phần tử lớn nhất?'};
   if(mode==='partial') output={title:fixture.title,description:fixture.description};
   if(mode==='repair' && !payload.messages[1].content.includes('validation_issues'))output={title:fixture.title,description:fixture.description};
@@ -74,6 +90,33 @@ async function freePort(){const s=net.createServer();await new Promise(r=>s.list
   r=await student.chat('Tạo bài tính tổng hai số nguyên');check(!r.draft&&calls.length===0,'student cannot route to generation/provider');
   const denied=await student.json('/backend/api/ai_draft.php',{action:'update',draft_id:'x',revision:1,data:fixture});check(denied.status===403,'direct staff draft mutation denied to student');
   const bare=await teacher.json('/backend/api/ai_create_problem.php',fixture);check(bare.status===422,'legacy raw payload cannot bypass draft confirmation');
+  mode='roman';
+  const beforeRoman=calls.length;
+  for(const source of [romanSource,'tạo cho tôi bài tập\n'+romanSource]){
+    r=await admin.chat(source);
+    const context=JSON.parse(calls.at(-1).messages[1].content);
+    check(r.draft?.data.sample_input==='3749'&&r.draft.data.sample_output==='MMMDCCXLIX'&&context.original_statement===source&&!context.current_draft,'Roman statement reaches existing generator intact, with or without creation prefix');
+    check(['58:LVIII','1994:MCMXCIV'].every(pair=>r.draft.data.test_cases.some(t=>t.stdin+':'+t.expected===pair))&&r.draft.data.assumptions.length===2,'structured Vietnamese mock draft preserves original examples and explicit assumptions');
+  }
+  check(calls.length===beforeRoman+2&&Number(sql('SELECT COUNT(*) n FROM problems')[0].n)===0,'one generation per Roman source, no classifier call or business inserts');
+  mode='semantic-clarify';
+  const kept=(await admin.json('/backend/api/ai_state.php')).draft;
+  const ambiguous='Tạo bài: Cho chuỗi s, biến đổi s theo quy tắc chưa xác định.';
+  const beforeClarify=calls.length;
+  r=await admin.chat(ambiguous);
+  check(!r.draft&&r.answer?.includes('quy tắc')&&calls.length===beforeClarify+1&&(await admin.json('/backend/api/ai_state.php')).draft.id===kept.id,'semantic ambiguity uses existing clarification without repair or overwriting the accepted draft');
+  mode='ok';
+  r=await admin.chat('Chuyển đổi sang dạng mã hóa đã mô tả.');
+  check(r.draft&&JSON.parse(calls.at(-1).messages[1].content).original_statement===ambiguous+'\nLàm rõ của người dùng: Chuyển đổi sang dạng mã hóa đã mô tả.','conversion follow-up reuses only its pending source');
+  await admin.chat('Tạo bài về mảng');
+  mode='quota';
+  await admin.chat('Given a string, transform it with a replacement table.');
+  const afterFailedSwitch=calls.length;
+  mode='ok';
+  await admin.chat('Tổng');
+  check(calls.length===afterFailedSwitch,'failed new task cannot reactivate stale pending source');
+  // Use a new isolated login scope for existing first-generation assertions.
+  await admin.login('admin');
   mode='slow';let countAtField=-1;
   r=await teacher.chat('Cho hai số nguyên a và b, tính tổng.',{},event=>{if(event.name==='field'&&countAtField<0)countAtField=Number(sql('SELECT COUNT(*) n FROM problems')[0].n);});
   check(r.draft&&r.firstAt<r.elapsed-500&&r.elapsed>5000,'actual provider fields arrive before final draft, exceeding PHP timer');
@@ -95,10 +138,26 @@ async function freePort(){const s=net.createServer();await new Promise(r=>s.list
   const persisted=sql('SELECT p.suggested_lang,v.input_desc,v.output_desc,v.time_limit_ms FROM problems p JOIN problem_versions v ON v.id=p.current_version_id')[0];
   check(persisted.suggested_lang==='cpp'&&Number(persisted.time_limit_ms)===1700&&persisted.input_desc===fixture.input_desc&&persisted.output_desc===fixture.output_desc,'save preserves all reviewed form fields');
   const cases=sql('SELECT is_public,is_boundary,expected_output FROM test_cases ORDER BY case_order');check(cases.length===3&&Number(cases[1].is_boundary)===1&&Number(cases[1].is_public)===0,'save preserves hidden and boundary flags');
+  const savedState=await teacher.json('/backend/api/ai_state.php');
+  check(savedState.draft.status==='saved'&&savedState.messages.some(m=>m.text.includes('Bạn có thể gửi đề tiếp theo')),'saved receipt and completion message survive state restore');
+  const beforeQuestion=calls.length;
+  r=await teacher.chat('Hướng dẫn nộp bài');
+  check(r.answer&&!r.draft&&calls.length===beforeQuestion,'app question after save does not generate or reopen a draft');
   mode='repair';const before=calls.length;r=await teacher.chat('Cho hai số nguyên a và b, tính tổng.');check(r.draft&&calls.length===before+2,'partial streamed draft gets one contextual repair');draft=r.draft;
+  const newContext=JSON.parse(calls.at(-1).messages[1].content);
+  check(draft.id!==savedState.draft.id&&!newContext.current_draft&&newContext.original_statement==='Cho hai số nguyên a và b, tính tổng.','next problem starts a fresh draft and source after save');
   const oldRetry=await teacher.json('/backend/api/ai_create_problem.php',payload);check(oldRetry.ok&&oldRetry.problem_id===results[0].problem_id,'idempotency receipt survives replacing current draft');
+  check((await teacher.json('/backend/api/ai_state.php')).draft.id===draft.id,'old save receipt never replaces the newer active draft');
   mode='quota';r=await teacher.chat('Sửa giới hạn bài',{draft_id:draft.id,revision:draft.revision});const error=r.events.find(e=>e.name==='error');check(error?.data.code==='ai_quota'&&!JSON.stringify(r).includes('offline-stream-key'),'streamed provider failures are typed and sanitized');
   const retained=await teacher.json('/backend/api/ai_state.php');check(retained.draft.revision===draft.revision&&retained.draft.data.title===draft.data.title,'failed AI revision retains current draft');
+  // Save a second problem from the next draft, without reusing the first slug/key.
+  const second=await teacher.json('/backend/api/ai_draft.php',{action:'update',draft_id:draft.id,revision:draft.revision,data:{...draft.data,slug:'second-problem-stream'}});
+  const secondPayload={draft_id:second.draft.id,revision:second.draft.revision,idempotency_key:second.draft.save_key};
+  const secondSaved=await teacher.json('/backend/api/ai_create_problem.php',secondPayload);
+  check(secondSaved.ok&&secondSaved.problem_id!==results[0].problem_id&&Number(sql('SELECT COUNT(*) n FROM problems')[0].n)===2,'second explicit save creates a separate problem after the first completion');
+  await teacher.json('/backend/api/ai_create_problem.php',payload);
+  await teacher.json('/backend/api/ai_create_problem.php',secondPayload);
+  check(Number(sql('SELECT COUNT(*) n FROM problems')[0].n)===2&&(await teacher.json('/backend/api/ai_state.php')).draft.id===second.draft.id,'retrying either completed draft creates no duplicates or state replacement');
   mode='partial';r=await admin.chat('Cho hai số nguyên a và b, tính tổng.');check(!r.draft&&r.events.some(e=>e.name==='error'),'repeated incomplete streams never produce a valid blank preview');
   check((await admin.json('/backend/api/ai_state.php')).draft===null,'failed generation writes no staff draft');
   mode='ok';
@@ -118,6 +177,9 @@ async function freePort(){const s=net.createServer();await new Promise(r=>s.list
   await admin.chat('Hướng dẫn nộp bài');
   await admin.chat('Tổng');
   check(calls.length===beforeHelp,'intervening help clears pending clarification instead of resuming an old task');
+  // The second draft was saved above, so revisions need a new open review draft.
+  mode='ok';
+  await teacher.chat('Cho hai số nguyên a và b, tính tổng.');
   mode='clarify';
   const revisionRequest='Sửa giới hạn bài';
   const retainedBefore=(await teacher.json('/backend/api/ai_state.php')).draft;
