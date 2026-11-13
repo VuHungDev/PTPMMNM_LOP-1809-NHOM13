@@ -4,6 +4,7 @@
 // Hỗ trợ 6 ngôn ngữ: C, C++, Java, Python, PHP, JS (chương trình 1 tệp, stdin/stdout).
 
 require_once __DIR__ . '/../config/bootstrap.php';
+require_once __DIR__ . '/OutputComparator.php';
 
 final class JudgeEngine
 {
@@ -23,8 +24,7 @@ final class JudgeEngine
 
     public static function normalizeOutput(string $out): string
     {
-        $out = str_replace("\r\n", "\n", trim($out));
-        return implode("\n", array_map('rtrim', explode("\n", $out)));
+        return OutputComparator::normalize($out);
     }
 
     private static function bin(string $exe): string
@@ -411,9 +411,7 @@ final class JudgeEngine
             $maxTimeMs = max($maxTimeMs, $exec['time_ms']);
 
             if ($exec['verdict'] === 'OK') {
-                $actualNorm   = self::normalizeOutput($exec['stdout']);
-                $expectedNorm = self::normalizeOutput($tc['expected_output']);
-                if ($actualNorm === $expectedNorm) {
+                if (OutputComparator::matches($exec['stdout'], $tc['expected_output'])) {
                     $caseVerdict = 'AC';
                     $passCount++;
                     $totalScore += (int)$tc['points'];

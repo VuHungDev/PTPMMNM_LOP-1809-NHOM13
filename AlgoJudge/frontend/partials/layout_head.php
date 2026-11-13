@@ -21,7 +21,7 @@ $sbHasUser = !empty($user);
             } catch (e) {}
         })();
     </script>
-    <link rel="stylesheet" href="<?= url('/frontend/assets/css/algojudge.css') ?>?v=20261111-2">
+    <link rel="stylesheet" href="<?= url('/frontend/assets/css/algojudge.css') ?>?v=20261113-output-3">
     <script id="monaco-loader" src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
     <script id="alpine-cdn" src="<?= url('/frontend/assets/js/vendor/alpine.min.js') ?>" defer></script>
 </head>

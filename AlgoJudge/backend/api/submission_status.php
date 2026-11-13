@@ -80,6 +80,7 @@ foreach ($rawCases as $c) {
         'stdin_preview'     => $isPublic ? $c['stdin_data'] : '[Dữ liệu chấm kín — Đã ẩn bảo mật]',
         'expected_preview'  => $isPublic ? $c['expected_output'] : '[Đáp án chấm kín — Đã ẩn bảo mật]',
         'actual_preview'    => $isPublic ? mb_substr((string)$c['actual_output'], 0, 300) : '[Đầu ra bị ẩn trên bộ test kín]',
+        'actual_truncated'  => $isPublic && mb_strlen((string)$c['actual_output']) > 300,
     ];
 }
 

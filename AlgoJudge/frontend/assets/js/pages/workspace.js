@@ -4,6 +4,7 @@ import { apiFetch } from '../modules/http.js';
 import { pollUntilDone, formatCustomResult } from '../modules/poll.js';
 import { createCodeEditor, setEditorLanguage } from '../modules/editor.js';
 import { ready as alpineReady } from '../modules/alpine-boot.js';
+import { renderSubmissionConsole } from '../modules/submission-result.js';
 
 const CFG = window.WS_CFG || {};
 const LANG_META = CFG.langMeta || {};
@@ -165,15 +166,7 @@ export function pollSubmissionStatus(submissionId) {
 
 function renderSubmissionResult(data) {
     const sub = data.submission;
-    let lines = `=== KẾT QUẢ CHẤM BÀI NỘP #${sub.id} (Bộ dữ liệu v${sub.version_number}.0) ===\n`;
-    lines += `Trạng thái: ${sub.final_verdict} | Điểm: ${sub.final_score}/100 | Vượt qua: ${sub.pass_count}/${sub.total_cases} ca\n\n`;
-    data.active_run_cases.forEach((tc) => {
-        lines += `• Test #${tc.case_order} (${tc.is_public ? 'Công khai' : 'Test kín'}${tc.is_boundary ? ' - Biên' : ''}): [${tc.verdict}] - ${tc.execution_time_ms} ms\n`;
-        if (tc.is_public) {
-            lines += `   Stdin: ${tc.stdin_preview.replace(/\n/g, ' ')} | Đáp án: ${tc.expected_preview} | Của bạn: ${tc.actual_preview}\n`;
-        }
-    });
-    el('console-output').innerText = lines;
+    renderSubmissionConsole(el('console-output'), data);
 
     let html = `<div style="background:#f8fafc; padding:12px; border-radius:8px; margin-bottom:14px;">
         <strong>Bài nộp #${sub.id}</strong> — Ngôn ngữ: <code>${sub.language}</code> — Đề v<strong>${sub.version_number}.0</strong>

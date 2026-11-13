@@ -44,7 +44,7 @@ $pageTitle = $problem['title'];
 $activeNav = 'train';
 require FE_DIR . '/partials/layout_head.php';
 ?>
-<div class="ide-wrapper">
+<div class="ide-wrapper workspace-ide">
     <div class="ide-left" x-data="{ leftTab: 'desc' }">
         <div class="ide-tabs">
             <div class="ide-tab" x-bind:class="{ 'active': leftTab === 'desc' }" x-on:click="leftTab = 'desc'">📄 Đề bài &amp; Ví dụ</div>
@@ -52,7 +52,7 @@ require FE_DIR . '/partials/layout_head.php';
         </div>
 
         <div id="tab-desc" class="ide-content" x-show="leftTab === 'desc'">
-            <div style="display:flex; gap:16px; margin-bottom:16px; font-size:0.85rem; color:var(--cl-muted); background:#f8fafc; padding:10px 14px; border-radius:8px;">
+            <div class="workspace-problem-limits" style="display:flex; gap:16px; margin-bottom:16px; font-size:0.85rem; color:var(--cl-muted); background:#f8fafc; padding:10px 14px; border-radius:8px;">
                 <span>⏱ Giới hạn: <strong><?= (int)$problem['time_limit_ms'] ?> ms</strong></span>
                 <span>💾 Bộ nhớ: <strong><?= (int)($problem['memory_limit_kb'] / 1024) ?> MB</strong></span>
                 <span>📥 stdin / 📤 stdout</span>
@@ -99,8 +99,8 @@ require FE_DIR . '/partials/layout_head.php';
 
     <div class="ide-right" data-aj-cmp="workspace">
         <div class="ide-toolbar">
-            <div style="display:flex; align-items:center; gap:12px;">
-                <label style="font-size:0.85rem; color:#a6adc8;">Ngôn ngữ:</label>
+            <div class="workspace-toolbar-language">
+                <label for="lang-select" style="font-size:0.85rem; color:#a6adc8;">Ngôn ngữ:</label>
                 <select id="lang-select" x-on:change="changeLanguage()" style="background:#313244; color:#fff; border:1px solid #45475a; padding:6px 12px; border-radius:6px;">
                     <?php foreach (JudgeEngine::LANGUAGES as $key => $meta): ?>
                         <option value="<?= e($key) ?>"><?= e($meta['label']) ?></option>
@@ -108,10 +108,10 @@ require FE_DIR . '/partials/layout_head.php';
                 </select>
                 <span id="draft-status" style="font-size:0.8rem; color:#a6adc8;">Đã sẵn sàng</span>
             </div>
-            <div style="display:flex; gap:8px;">
-                <button class="btn btn-outline" x-on:click="saveDraft(true)">💾 Lưu nháp</button>
-                <button class="btn btn-outline" x-on:click="runCustomCode()">▶ Chạy thử (Custom Input)</button>
-                <button class="btn btn-success" x-on:click="submitSolution(false)">🚀 Nộp bài (Submit)</button>
+            <div class="workspace-toolbar-actions">
+                <button type="button" class="btn btn-outline" x-on:click="saveDraft(true)">💾 Lưu nháp</button>
+                <button type="button" class="btn btn-outline" x-on:click="runCustomCode()">▶ Chạy thử (Custom Input)</button>
+                <button type="button" class="btn btn-success" x-on:click="submitSolution(false)">🚀 Nộp bài (Submit)</button>
             </div>
         </div>
 
@@ -119,23 +119,23 @@ require FE_DIR . '/partials/layout_head.php';
 
         <div class="ide-console">
             <div class="console-header">
-                <div style="display:flex; gap:16px; align-items:center;">
+                <div class="workspace-console-heading">
                     <strong style="font-size:0.85rem; color:#89b4fa;">🖥 BẢNG ĐIỀU KHIỂN THỰC THI (CONSOLE)</strong>
                     <span id="console-badge" class="badge" style="background:#313244; color:#cdd6f4;">Chờ lệnh</span>
                 </div>
-                <div style="font-size:0.78rem; color:#a6adc8;">
+                <div class="workspace-console-meta" style="font-size:0.78rem; color:#a6adc8;">
                     Khóa Idempotency: <code id="idem-display" style="color:#f9e2af;">-</code>
                     <button class="btn btn-outline" style="padding:2px 8px; font-size:0.74rem; margin-left:6px;" x-on:click="submitSolution(true)" title="Mô phỏng mạng lag gửi lại cùng 1 request">Test Gửi Trùng</button>
                 </div>
             </div>
-            <div class="console-body" style="display:grid; grid-template-columns: 35% 65%; gap:14px;">
+            <div class="console-body workspace-console-body">
                 <div>
                     <div style="font-size:0.78rem; color:#a6adc8; margin-bottom:4px;">Dữ liệu tự nhập (Custom Stdin):</div>
                     <textarea id="custom-stdin" style="width:100%; height:140px; background:#11111b; color:#cdd6f4; border:1px solid #313244; border-radius:6px; padding:8px; font-family:monospace;"><?= e($problem['sample_input']) ?></textarea>
                 </div>
                 <div>
                     <div style="font-size:0.78rem; color:#a6adc8; margin-bottom:4px;">Kết quả đầu ra / Tiến trình chấm:</div>
-                    <div id="console-output" style="background:#11111b; border:1px solid #313244; border-radius:6px; padding:10px; height:140px; overflow-y:auto; white-space:pre-wrap;">Nhấn "Chạy thử" hoặc "Nộp bài".</div>
+                    <div id="console-output" class="workspace-console-output" role="region" aria-label="Kết quả thực thi và chấm bài" aria-live="polite">Nhấn "Chạy thử" hoặc "Nộp bài".</div>
                 </div>
             </div>
         </div>
@@ -152,6 +152,6 @@ window.WS_CFG = {
 };
 </script>
 <?php
-$pageScripts = '<script type="module">import "' . url('/frontend/assets/js/pages/workspace.js') . '";</script>';
+$pageScripts = '<script type="module">import "' . url('/frontend/assets/js/pages/workspace.js') . '?v=20261113-output-3";</script>';
 require FE_DIR . '/partials/layout_foot.php';
 ?>
