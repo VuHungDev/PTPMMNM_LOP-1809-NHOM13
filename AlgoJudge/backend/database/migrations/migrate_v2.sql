@@ -1,6 +1,5 @@
 -- backend/database/migrate_v2.sql
--- Nâng cấp từ bản demo cũ (python/cpp, instructor) lên 6 ngôn ngữ + 3 vai trò.
--- Chỉ dùng khi nâng cấp CSDL demo cũ. Schema cài mới hiện tại đã có v2-v8, không chạy lại migration cũ.
+-- Nâng cấp lên 6 ngôn ngữ + 3 vai trò
 
 ALTER TABLE drafts
   MODIFY COLUMN language ENUM('c','cpp','java','python','php','js') NOT NULL DEFAULT 'python';

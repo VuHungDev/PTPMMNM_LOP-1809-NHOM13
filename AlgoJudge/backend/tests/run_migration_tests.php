@@ -12,7 +12,7 @@ $exists->execute([$name]);
 if ($exists->fetchColumn()) { fwrite(STDERR, "Refusing to overwrite $name.\n"); exit(1); }
 $root = dirname(__DIR__, 2);
 $sql = file_get_contents($root . '/backend/database/schema.sql');
-foreach (['classes', 'class_members', 'password_reset_otps', 'password_reset_requests', 'admin_activity_logs'] as $table) {
+foreach (['chatbot_creations', 'chatbot_sessions', 'classes', 'class_members', 'password_reset_otps', 'password_reset_requests', 'admin_activity_logs'] as $table) {
     $sql = preg_replace('/CREATE TABLE ' . $table . ' \([\s\S]*?\) ENGINE=InnoDB;/', '', $sql, 1, $count);
     if ($count !== 1) throw new RuntimeException('Fixture schema no longer matches ' . $table);
 }
@@ -77,4 +77,25 @@ foreach ($beforeV9 as $table => [$select, $order, $original]) {
 $token = $db->query('SELECT purpose,context_hash,auth_version FROM password_reset_otps LIMIT 1')->fetch();
 migrationCheck($token['purpose'] === 'password_reset' && $token['context_hash'] === null && $token['auth_version'] === null, 'v9 preserves existing recovery semantics');
 migrationCheck((int)$db->query('SELECT COUNT(*) FROM admin_activity_logs')->fetchColumn() === 0, 'audit starts empty without invented past activity');
+// v10 is additive and safe to rerun, including after chat state and receipts exist.
+$beforeV10 = [];
+foreach ($db->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN) as $table) {
+    $order = $table === 'daemon_heartbeat' ? 'name' : 'id';
+    $beforeV10[$table] = [$order, $db->query("SELECT * FROM `$table` ORDER BY `$order`")->fetchAll()];
+}
+$m10 = file_get_contents($root . '/backend/database/migrations/migrate_v10_chatbot.sql');
+$db->exec($m10);
+$session = str_repeat('a', 64);
+$draftId = str_repeat('b', 32);
+$key = str_repeat('c', 48);
+$db->prepare('INSERT INTO chatbot_sessions (id,user_id,auth_version,role,messages) VALUES (?,1,1,\'admin\',?)')->execute([$session, '[{"role":"user","text":"Synthetic migration fixture"}]']);
+$db->prepare('INSERT INTO chatbot_creations (session_id,user_id,draft_id,revision,save_key,envelope) VALUES (?,1,?,1,?,?)')->execute([$session, $draftId, $key, '{"status":"saved","problem_id":1}']);
+$chatBefore = $db->query('SELECT * FROM chatbot_sessions')->fetchAll();
+$receiptsBefore = $db->query('SELECT * FROM chatbot_creations')->fetchAll();
+$db->exec($m10);
+foreach ($beforeV10 as $table => [$order, $original]) {
+    migrationCheck($db->query("SELECT * FROM `$table` ORDER BY `$order`")->fetchAll() === $original, 'v10 preserves complete original table: ' . $table);
+}
+migrationCheck($db->query('SELECT * FROM chatbot_sessions')->fetchAll() === $chatBefore, 'v10 rerun preserves private chat state');
+migrationCheck($db->query('SELECT * FROM chatbot_creations')->fetchAll() === $receiptsBefore, 'v10 rerun preserves save receipts');
 echo "Migration checks: $checks passed. Synthetic schema retained: $name.\n";

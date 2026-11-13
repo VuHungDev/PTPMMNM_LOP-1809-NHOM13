@@ -4,6 +4,7 @@
 require_once __DIR__ . '/../../backend/lib/Auth.php';
 require_once __DIR__ . '/../../backend/lib/AuditLog.php';
 require_once __DIR__ . '/../../backend/lib/JudgeEngine.php';
+require_once __DIR__ . '/../../backend/lib/AIHelper.php';
 $user = Auth::requireRole(['teacher', 'admin']);
 $msg = '';
 $err = '';
@@ -52,6 +53,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($action === 'create' || $action ==
     $desc = trim($_POST['description'] ?? '');
     $inDesc = trim($_POST['input_desc'] ?? '');
     $outDesc = trim($_POST['output_desc'] ?? '');
+    $noInput = AIHelper::noInput(['input_desc' => $inDesc]);
     $sampleIn = trim($_POST['sample_input'] ?? '');
     $sampleOut = trim($_POST['sample_output'] ?? '');
     $timeLimit = max(100, (int)($_POST['time_limit_ms'] ?? 1000));
@@ -68,7 +70,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($action === 'create' || $action ==
                 'stdin_data' => (string)$sin,
                 'expected_output' => (string)($testExpected[$i] ?? ''),
                 'is_public' => isset($testPublic[$i]) ? 1 : 0,
-                'is_boundary' => isset($testBoundary[$i]) ? 1 : 0,
+                'is_boundary' => ($testBoundary[$i] ?? '0') === '1' ? 1 : 0,
             ];
         }
         if (!$rawCases) {
@@ -89,7 +91,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($action === 'create' || $action ==
         $err = 'Slug chưa đúng — chỉ gồm chữ thường, số, gạch ngang (3–100 ký tự). Sửa mỗi ô này là được, các ô khác vẫn giữ nguyên.';
         $errStep = 1;
         $keepInput();
-    } elseif ($title === '' || $desc === '' || $sampleIn === '' || $sampleOut === '') {
+    } elseif ($title === '' || $desc === '' || (!$noInput && $sampleIn === '') || $sampleOut === '') {
         $err = 'Còn thiếu thông tin bắt buộc (đánh dấu *). Chỉ cần bổ sung ô trống, các ô đã nhập vẫn giữ nguyên.';
         $errStep = $title === '' ? 1 : 2;
         $keepInput();
@@ -98,10 +100,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($action === 'create' || $action ==
         foreach ($testStdin as $i => $sin) {
             $sin = trim($sin);
             $sexp = trim($testExpected[$i] ?? '');
-            if ($sin === '' || $sexp === '') {
+            if ((!$noInput && $sin === '') || $sexp === '') {
                 continue;
             }
-            $cases[] = [$sin, $sexp, isset($testPublic[$i]) ? 1 : 0, isset($testBoundary[$i]) ? 1 : 0];
+            $cases[] = [$sin, $sexp, isset($testPublic[$i]) ? 1 : 0, ($testBoundary[$i] ?? '0') === '1' ? 1 : 0];
         }
         if (count($cases) < 1) {
             $err = 'Chưa có test case hợp lệ — chỉ cần điền đủ Input + Output ở 1 dòng, các thông tin trước đó vẫn giữ nguyên.';
@@ -164,13 +166,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($action === 'create' || $action ==
     }
 }
 
-$pageTitle = $editing ? 'Sửa bài tập #' . (int)$editing['id'] : 'Thêm bài tập mới';
+$isEdit = (int)($editing['id'] ?? 0) > 0;
+$pageTitle = $isEdit ? 'Sửa bài tập #' . (int)$editing['id'] : 'Thêm bài tập mới';
 $activeNav = 'prob_new';
 require FE_DIR . '/partials/layout_head.php';
 $ecases = $editing['cases'] ?? [['stdin_data' => '', 'expected_output' => '', 'is_public' => 1, 'is_boundary' => 0]];
 ?>
 <div style="max-width:760px; margin:28px auto; padding:0 24px;">
-    <h2 style="margin-bottom:4px;"><?= $editing ? 'Sửa bài tập #' . (int)$editing['id'] : 'Tạo bài tập mới' ?></h2>
+    <h2 style="margin-bottom:4px;"><?= $isEdit ? 'Sửa bài tập #' . (int)$editing['id'] : 'Tạo bài tập mới' ?></h2>
     <p style="color:var(--cl-muted); margin:0 0 8px;">Chỉ 3 bước — mất khoảng 2 phút.</p>
     <p style="margin-bottom:16px;"><a class="btn btn-secondary btn-back" href="<?= url('/frontend/instructor/problems.php') ?>">← Về danh sách bài tập</a></p>
 
@@ -187,8 +190,8 @@ $ecases = $editing['cases'] ?? [['stdin_data' => '', 'expected_output' => '', 'i
     <div style="background:#fff; padding:24px; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.05);">
         <form method="POST" id="problem-form" novalidate>
             <?= csrf_field() ?>
-            <input type="hidden" name="action" value="<?= $editing ? 'update' : 'create' ?>">
-            <?php if ($editing && ($editing['id'] ?? 0) > 0): ?><input type="hidden" name="problem_id" value="<?= (int)$editing['id'] ?>"><?php endif; ?>
+            <input type="hidden" name="action" value="<?= $isEdit ? 'update' : 'create' ?>">
+            <?php if ($isEdit): ?><input type="hidden" name="problem_id" value="<?= (int)$editing['id'] ?>"><?php endif; ?>
 
             <!-- BƯỚC 1 -->
             <section data-pane="1">
@@ -268,7 +271,7 @@ $ecases = $editing['cases'] ?? [['stdin_data' => '', 'expected_output' => '', 'i
                         </div>
                         <div class="form-group"><label>Giới hạn chạy (ms)</label><input type="number" name="time_limit_ms" class="form-control" value="<?= (int)($editing['time_limit_ms'] ?? 1000) ?>" min="100" step="100"></div>
                     </div>
-                    <?php if ($editing && ($editing['id'] ?? 0) > 0): ?>
+                    <?php if ($isEdit): ?>
                     <div class="form-group"><label>Ghi chú thay đổi</label><input type="text" name="changelog" class="form-control" value="Cập nhật đề / test"></div>
                     <?php endif; ?>
                 </details>
@@ -277,7 +280,7 @@ $ecases = $editing['cases'] ?? [['stdin_data' => '', 'expected_output' => '', 'i
             <div style="display:flex; gap:10px; margin-top:16px;">
                 <button type="button" class="btn btn-secondary btn-back" id="pf-back" style="display:none;" hidden>← Quay lại</button>
                 <button type="button" class="btn btn-primary" id="pf-next" style="flex:1; justify-content:center;">Tiếp tục →</button>
-                <button type="submit" class="btn btn-primary" id="pf-submit" style="flex:1; justify-content:center; display:none;" hidden><?= $editing && ($editing['id'] ?? 0) > 0 ? 'Lưu bài tập' : 'Tạo bài tập' ?></button>
+                <button type="submit" class="btn btn-primary" id="pf-submit" style="flex:1; justify-content:center; display:none;" hidden><?= $isEdit ? 'Lưu bài tập' : 'Tạo bài tập' ?></button>
                 <a class="btn btn-secondary btn-back" href="<?= url('/frontend/instructor/problems.php') ?>">Hủy</a>
             </div>
         </form>
@@ -320,11 +323,12 @@ $ecases = $editing['cases'] ?? [['stdin_data' => '', 'expected_output' => '', 'i
         btnSubmit.style.display = btnSubmit.hidden ? 'none' : '';
         window.scrollTo({ top: 0, behavior: 'smooth' });
     }
+    const noInput = () => /không\s+(?:có\s+|cần\s+|nhận\s+)?(?:dữ liệu\s+)?(?:đầu vào|input)|no\s+input/iu.test(document.querySelector('#problem-form [name="input_desc"]').value);
     function validPane(n, mark) {
         const pane = document.querySelector(`#problem-form [data-pane="${n}"]`);
         let ok = true;
         for (const el of pane.querySelectorAll('[required]')) {
-            const empty = !el.value.trim();
+            const empty = !el.value.trim() && !(el.name === 'sample_input' && noInput());
             el.style.borderColor = empty ? '#ef4444' : '';
             if (empty && ok) {
                 ok = false;
@@ -394,7 +398,7 @@ $ecases = $editing['cases'] ?? [['stdin_data' => '', 'expected_output' => '', 'i
     const errStep = <?= (int)($errStep ?? 1) ?>;
     const hasServerErr = <?= $err ? 'true' : 'false' ?>;
     // --- Tự lưu nháp vào localStorage (chống mất khi F5 / rớt mạng) ---
-    const isEdit = <?= ($editing && ($editing['id'] ?? 0) > 0) ? 'true' : 'false' ?>;
+    const isEdit = <?= $isEdit ? 'true' : 'false' ?>;
     const draftKey = isEdit ? null : 'pf-draft-new';
     const form = document.getElementById('problem-form');
     const draftNote = document.getElementById('pf-draft-note');
@@ -410,33 +414,58 @@ $ecases = $editing['cases'] ?? [['stdin_data' => '', 'expected_output' => '', 'i
             stdin: row.querySelector('textarea[name="test_stdin[]"]').value,
             exp: row.querySelector('textarea[name="test_expected[]"]').value,
             pub: row.querySelector('input[type=checkbox]').checked,
+            boundary: row.querySelector('input[type=hidden]').value === '1',
         }));
         return data;
     }
     function applyDraft(d) {
-        if (!d) return false;
+        if (!d || typeof d !== 'object') return false;
         let filled = false;
-        form.querySelectorAll('[name]').forEach(el => {
-            const v = d[el.name];
-            if (v === undefined || el.name === 'test_stdin[]' || el.name === 'test_expected[]') return;
-            if (el.type === 'checkbox') { if (v) { el.checked = true; filled = true; } }
-            else if (v !== '' && !el.value) { el.value = v; filled = true; }
+        const fields = ['title', 'slug', 'topic', 'difficulty', 'description', 'input_desc', 'output_desc', 'sample_input', 'sample_output', 'suggested_lang', 'time_limit_ms'];
+        fields.forEach(name => {
+            if (typeof d[name] !== 'string' && typeof d[name] !== 'number') return;
+            const el = form.querySelector(`[name="${name}"]`);
+            if (el) { el.value = d[name]; filled = true; }
         });
-        if (d._cases && d._cases.length) {
-            const rows = list.querySelectorAll('.case-row');
+        if (Array.isArray(d._cases) && d._cases.length) {
+            list.innerHTML = '';
             d._cases.forEach((c, i) => {
-                let row = rows[i];
-                if (!row) { document.getElementById('pf-add-case').click(); row = list.querySelectorAll('.case-row')[i]; }
-                if (!row) return;
+                document.getElementById('pf-add-case').click();
+                const row = list.querySelectorAll('.case-row')[i];
                 const [ta1, ta2] = row.querySelectorAll('textarea');
-                if (!ta1.value && c.stdin) { ta1.value = c.stdin; filled = true; }
-                if (!ta2.value && c.exp) { ta2.value = c.exp; filled = true; }
-                if (c.pub) row.querySelector('input[type=checkbox]').checked = true;
+                ta1.value = c.stdin ?? '';
+                ta2.value = c.exp ?? '';
+                row.querySelector('input[type=checkbox]').checked = !!c.pub;
+                const boundary = c.boundary ?? d[`test_boundary[${i}]`];
+                row.querySelector('input[type=hidden]').value = boundary === true || boundary === 1 || boundary === '1' ? '1' : '0';
             });
+            filled = true;
         }
+        slugTouched = !!slugEl.value;
         return filled;
     }
-    if (draftKey && !hasServerErr) {
+    // Validate the handoff before restoring any older local draft.
+    const fromAI = new URLSearchParams(location.search).get('from_ai') === '1';
+    function validPrefill(d) {
+        if (!d || typeof d !== 'object' || Array.isArray(d)) return false;
+        if (!['title', 'description', 'sample_input', 'sample_output'].every(k => typeof d[k] === 'string')) return false;
+        if (!['slug', 'topic', 'difficulty', 'input_desc', 'output_desc'].every(k => d[k] === undefined || typeof d[k] === 'string')) return false;
+        if (d.time_limit_ms !== undefined && (!Number.isInteger(d.time_limit_ms) || d.time_limit_ms < 100)) return false;
+        if (!['warnings', 'assumptions'].every(k => d[k] === undefined || (Array.isArray(d[k]) && d[k].every(v => typeof v === 'string')))) return false;
+        if (!['needs_review', 'ready_for_publish'].every(k => d[k] === undefined || typeof d[k] === 'boolean')) return false;
+        const validFlag = v => v === undefined || [true, false, 0, 1, '0', '1'].includes(v);
+        return d.test_cases === undefined || (Array.isArray(d.test_cases) && d.test_cases.every(c =>
+            c && typeof c === 'object' && typeof c.stdin === 'string' && typeof c.expected === 'string'
+            && validFlag(c.is_public) && validFlag(c.is_boundary)));
+    }
+    let prefill = null;
+    if (fromAI && !isEdit && !hasServerErr) {
+        try {
+            const pending = JSON.parse(sessionStorage.getItem('ai-prefill'));
+            if (validPrefill(pending)) prefill = pending;
+        } catch (_) {}
+    }
+    if (draftKey && !hasServerErr && !prefill) {
         let saved = null;
         try { saved = JSON.parse(localStorage.getItem(draftKey)); } catch (_) {}
         const anyTyped = [...form.querySelectorAll('input[type=text], textarea')].some(el => el.value.trim());
@@ -450,33 +479,45 @@ $ecases = $editing['cases'] ?? [['stdin_data' => '', 'expected_output' => '', 'i
         }, 400); });
         document.getElementById('pf-draft-clear').onclick = () => { clearDraft(); draftNote.hidden = true; };
     }
-    // Nhận dữ liệu từ trang AI (chế độ 1: xem trước trong form)
-    const fromAI = new URLSearchParams(location.search).get('from_ai') === '1';
-    if (fromAI && !hasServerErr) {
-        let pre = null;
-        try { pre = JSON.parse(sessionStorage.getItem('ai-prefill')); sessionStorage.removeItem('ai-prefill'); } catch (_) {}
-        if (pre) {
-            const set = (name, v) => { const el = form.querySelector(`[name="${name}"]`); if (el && v) el.value = v; };
-            set('title', pre.title); set('description', pre.description);
-            set('input_desc', pre.input_desc); set('output_desc', pre.output_desc);
-            set('sample_input', pre.sample_input); set('sample_output', pre.sample_output);
-            if (pre.topic) { const t = form.querySelector('[name="topic"]'); if (t) t.value = pre.topic; }
-            if (pre.difficulty) { const d = form.querySelector('[name="difficulty"]'); if (d) d.value = pre.difficulty; }
-            list.innerHTML = '';
-            (pre.test_cases?.length ? pre.test_cases : [{ stdin: '', expected: '', is_public: true }]).forEach(c => {
-                document.getElementById('pf-add-case').click();
-                const row = list.querySelectorAll('.case-row')[list.querySelectorAll('.case-row').length - 1];
-                const [ta1, ta2] = row.querySelectorAll('textarea');
-                ta1.value = c.stdin || ''; ta2.value = c.expected || '';
-                row.querySelector('input[type=checkbox]').checked = !!c.is_public;
-            });
-            renumber();
-            clearDraft();
-            bubble: {
-                const note = document.getElementById('pf-draft-note');
-                note.innerHTML = 'Đã điền dữ liệu từ AI — kiểm tra lại rồi bấm Tạo bài tập.';
-                note.hidden = false;
-            }
+    // Nhận dữ liệu từ trang AI (chế độ 1: xem trước trong form).
+    if (prefill) {
+        const set = (name, value) => { const el = form.querySelector(`[name="${name}"]`); if (el) el.value = value; };
+        ['title', 'slug', 'description', 'input_desc', 'output_desc', 'sample_input', 'sample_output'].forEach(name => set(name, prefill[name] ?? ''));
+        set('topic', prefill.topic || 'Cơ bản');
+        set('difficulty', prefill.difficulty || 'Easy');
+        set('time_limit_ms', prefill.time_limit_ms ?? 1000);
+        slugTouched = !!slugEl.value;
+        list.innerHTML = '';
+        const hasSample = (prefill.sample_input.trim() !== '' || noInput()) && prefill.sample_output.trim() !== '';
+        const cases = prefill.test_cases?.length ? prefill.test_cases : [{
+            stdin: hasSample ? prefill.sample_input : '', expected: hasSample ? prefill.sample_output : '', is_public: true, is_boundary: false,
+        }];
+        cases.forEach((c, i) => {
+            document.getElementById('pf-add-case').click();
+            const row = list.querySelectorAll('.case-row')[i];
+            const [ta1, ta2] = row.querySelectorAll('textarea');
+            ta1.value = c.stdin;
+            ta2.value = c.expected;
+            row.querySelector('input[type=checkbox]').checked = !!c.is_public;
+            row.querySelector('input[type=hidden]').value = c.is_boundary === true || c.is_boundary === 1 || c.is_boundary === '1' ? '1' : '0';
+        });
+        renumber();
+        draftNote.style.whiteSpace = 'pre-line';
+        draftNote.textContent = [
+            'Đã điền dữ liệu từ AI — hãy kiểm tra kỹ output mong đợi của mọi test trước khi tạo bài tập.',
+            typeof prefill._note === 'string' ? prefill._note : '',
+            ...(prefill.warnings ?? []).map(w => 'Cảnh báo: ' + w),
+            ...(prefill.assumptions ?? []).map(a => 'Giả định: ' + a),
+            prefill.needs_review === true ? 'Bản nháp cần được duyệt và chỉnh sửa trong form trước khi lưu.' : '',
+        ].filter(Boolean).join('\n');
+        if (!prefill.test_cases?.length && !hasSample) draftNote.textContent += ' Chưa có test hoàn chỉnh; hãy điền Input / Output cho dòng trống.';
+        draftNote.hidden = false;
+        // Persist first; retain the handoff for recovery if local storage is unavailable.
+        try {
+            localStorage.setItem(draftKey, JSON.stringify(collectDraft()));
+            sessionStorage.removeItem('ai-prefill');
+        } catch (_) {
+            draftNote.textContent += ' Không lưu được bản nháp trên trình duyệt; dữ liệu AI vẫn được giữ để thử lại.';
         }
     }
     show(hasServerErr ? errStep : 1);

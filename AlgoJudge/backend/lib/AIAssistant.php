@@ -1,523 +1,202 @@
 <?php
-// backend/lib/AIAssistant.php — Bộ não chatbot full-app: định tuyến ý định + tra cứu số liệu + thao tác có xác nhận.
-// Nguyên tắc: đọc thoải mái; mọi thao tác GHI đều phải qua confirm_token (2 bước).
-require_once __DIR__ . '/AuditLog.php';
+/** Pure, role-aware routing and verified application help. No provider or mutation entry points. */
+require_once __DIR__ . '/ChatbotQueries.php';
 
-class AIAssistant
+final class AIAssistant
 {
-    /** Danh sách thao tác GHI được phép qua chatbot (mỗi việc một hàm, không SQL tự do). */
-    const ACTIONS = [
-        'create_user' => 'Tạo tài khoản mới',
-        'add_test_case' => 'Thêm test case cho bài tập',
-        'toggle_problem' => 'Bật/tắt hiển thị bài tập',
-        'rejudge' => 'Chấm lại một bài nộp',
-        'retry_run' => 'Thử lại một lần chấm lỗi',
-        'export_progress' => 'Xuất báo cáo tiến độ lớp',
-    ];
-
-    /**
-     * Định tuyến tin nhắn → ['kind' => 'parse_problem'|'qa'|'stats'|'confirm'|'execute', ...].
-     * Heuristic cục bộ (không tốn API) cho các ý định rõ; còn lại nhờ AI phân loại.
-     */
-    public static function route(array $user, string $text): array
+    /** @return array{kind:string,answer?:string,links?:array,query?:string,filters?:array} */
+    public static function route(array $user, string $text, bool $hasDraft = false, bool $clarifying = false): array
     {
         $text = trim($text);
-        if ($text === '') throw new Exception('Hãy nhập nội dung trước.');
-        if (mb_strlen($text) > 12000) throw new Exception('Tin nhắn quá dài (tối đa ~12000 ký tự).');
-        $isStaff = in_array($user['role'], ['teacher', 'admin'], true);
-
-        // Học viên: chỉ hỏi đáp + tra cứu của mình — không tạo bài, không thao tác giảng viên
-        if (!$isStaff) {
-            $lines = count(preg_split('/\r?\n/', $text));
-            if ($lines >= 3 && preg_match('/(input|output|ví dụ|đầu vào|đầu ra)/iu', $text)) {
-                return ['kind' => 'qa', 'answer' => 'Tạo bài tập là chức năng của giảng viên. Bạn có thể hỏi tôi về đề bài, cách nộp bài, xem điểm ở đâu... (tôi chỉ gợi ý hướng, không đưa code giải).'];
-            }
-            if (preg_match('/tạo\s+(tài khoản|user)|thêm\s+test|chấm\s*lại|thử\s*lại|bật|tắt.*bài|xuất.*báo cáo/u', mb_strtolower($text))) {
-                return ['kind' => 'qa', 'answer' => 'Chức năng này dành cho giảng viên. Bạn cần giúp gì về luyện tập, nộp bài hay xem điểm?'];
-            }
-            return ['kind' => 'qa'];
+        if ($text === '' || mb_strlen($text) > 12000) {
+            return self::answered('Hãy nhập tin nhắn từ 1 đến 12000 ký tự.');
+        }
+        if (!self::knownRole($user)) return self::answered('Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại.');
+        $t = ChatbotQueries::normalize($text);
+        $staff = in_array($user['role'], ['teacher', 'admin'], true);
+        if (self::requestsPrivateData($t)) return self::privateDataRefusal();
+        if (self::requestsSolution($t)) return self::solutionRefusal();
+        $intent = ChatbotQueries::intent($user, $text);
+        if ($intent !== null) {
+            $denial = ChatbotQueries::denial($user, $intent['query'], $intent['filters']);
+            if ($denial !== null) return ['kind' => 'answer'] + $denial;
         }
 
-        // 1. Đề bài dài (nhiều dòng + có Input/Output) → tạo bài (giữ luồng cũ)
-        $lines = count(preg_split('/\r?\n/', $text));
-        if ($lines >= 3 && preg_match('/(input|output|ví dụ|đầu vào|đầu ra|stdin|test)/iu', $text)) {
-            return ['kind' => 'parse_problem'];
+        // A question about a screen is not permission to perform that screen's operation.
+        if (self::isGuide($t)) {
+            $help = self::knowledge($user, $t);
+            return $help !== null ? ['kind' => 'help'] + $help : self::answered(self::outsideScope());
         }
 
-        // 2. Ý định thao tác GHI — bắt bằng từ khóa tiếng Việt (không cần AI)
-        $t = mb_strtolower($text);
-        if (preg_match('/tạo\s+(tài khoản|tài khoan|user|người dùng|hoc vien|học viên|giáo viên|giao vien)/u', $t)) {
-            return self::needConfirm('create_user', self::extractUserFields($text), $user);
+        // A new statement can mention tests; that is different from adding tests to a saved problem.
+        if (self::isProblemRequest($text) && self::startsCreation($t) && !self::savedTarget($t)) {
+            return self::draftRoute($staff, $t);
         }
-        if (preg_match('/thêm\s+test/u', $t)) {
-            return self::needConfirm('add_test_case', self::extractTestFields($text), $user);
+        if (self::isMutation($t) || (self::savedTarget($t) && preg_match('/\b(sua|doi|them|xoa|cap nhat|edit|change|add|delete|update)\b/', $t))
+            || (!preg_match('/\b(?:ban nhap|draft)\b/', $t) && preg_match('/^(?:(?:hay|vui long|giup toi|giup minh|please)\s+)*(?:sua|doi|xoa|cap nhat|edit|change|delete|update)\s+(?:bai(?:\s+tap)?|problem|exercise)\b/', $t))) {
+            return self::answered('Chatbot không thực hiện thay đổi tài khoản, lớp, bài đã lưu, bộ test, điểm/XP, chấm lại, thử lại hàng đợi hoặc xuất báo cáo. Bạn có thể hỏi cách dùng màn hình phù hợp với quyền của mình. Bài mới chỉ được lưu bằng nút Thêm bài trên bản nháp đã duyệt.');
         }
-        if (preg_match('/(bật|tat|tắt|ẩn|hiện|an|hien).*bài/u', $t) || preg_match('/bài.*(bật|tat|tắt|ẩn|hiện)/u', $t)) {
-            return self::needConfirm('toggle_problem', self::extractProblemRef($text), $user);
+        if (self::isRevision($t)) {
+            if (!$staff) return self::answered('Học viên không được tạo hoặc chỉnh sửa bản nháp bài tập. Tôi có thể hướng dẫn luyện tập, nộp bài và tra cứu dữ liệu của chính bạn.');
+            if (!$hasDraft) return self::answered('Chưa có bản nháp để chỉnh sửa. Hãy gửi đề bài với yêu cầu tính toán rõ ràng để tạo bản nháp trước; chatbot không sửa bài đã lưu.');
+            return ['kind' => 'revise'];
         }
-        if (preg_match('/chấm\s*lại/u', $t)) {
-            return self::needConfirm('rejudge', self::extractSubmissionRef($text), $user);
-        }
-        if (preg_match('/thử\s*lại/u', $t) && preg_match('/run|chấm|lần/u', $t)) {
-            return self::needConfirm('retry_run', self::extractRunRef($text), $user);
-        }
-        if (preg_match('/xuất|bao cao|báo cáo|excel/u', $t)) {
-            return self::needConfirm('export_progress', self::extractClassRef($text), $user);
+        if (self::isProblemRequest($text)) {
+            $route = self::draftRoute($staff, $t);
+            // A short answer such as “Tính tổng” may complete the pending goal.
+            // A newly pasted statement (Cho/Given/...) always starts its own source.
+            if ($clarifying && $staff && $route['kind'] === 'draft'
+                && !preg_match('/^(?:(?:de bai|bai toan|problem(?: statement)?)\s*:\s*)?(?:cho\b|(?:you are\s+)?given\b|viet chuong trinh\b|write\s+(?:a\s+)?program\b)/', $t)
+                && !str_contains($t, "\n")) $route['continue_pending'] = true;
+            return $route;
         }
 
-        // 3. Câu hỏi tra cứu số liệu — bắt bằng từ khóa, truy vấn DB thật
-        $stat = self::tryStats($user, $text);
-        if ($stat !== null) return $stat;
-
-        // 4. Còn lại → hỏi đáp tự do qua AI (có ngữ cảnh vai trò + bản đồ tính năng)
-        return ['kind' => 'qa'];
+        if ($intent !== null) return ['kind' => 'query'] + $intent;
+        $help = self::knowledge($user, $t);
+        if ($help !== null) return ['kind' => 'help'] + $help;
+        // The endpoint owns the pending source. This flag cannot bypass role or safety checks above.
+        if ($clarifying && $staff && preg_match('/\b(?:tong|hieu|tich|thuong|lon nhat|nho nhat|nguyen to|doi xung|dem|sap xep|sum|max|min|prime|sort|count|yes|no)\b/', $t)) return ['kind' => 'draft', 'continue_pending' => true];
+        return self::answered(self::outsideScope());
     }
 
-    // ---------- Tra cứu số liệu (Nhóm 1) ----------
-
-    private static function tryStats(array $user, string $text): ?array
+    /** Existing consumers may inspect intent, but this never grants permission or calls AI. */
+    public static function isProblemRequest(string $text): bool
     {
-        global $pdo;
-        $t = mb_strtolower($text);
-        if (!in_array($user['role'], ['teacher', 'admin'], true)) return null;
-        $scope = '1=1';
-        $scopeParams = [];
-        if ($user['role'] === 'teacher') {
-            $scope = Auth::teacherStudentScope('u');
-            $scopeParams[] = (int)$user['id'];
-        }
-        $scopeLabel = $user['role'] === 'teacher' ? ' trong các lớp bạn quản lý' : ' trong hệ thống';
+        $t = ChatbotQueries::normalize(trim($text));
+        if ($t === '' || self::isGuide($t)) return false;
+        if (preg_match('/^(?:tim|xem|tra cuu|liet ke|find|search|show)\s+(?:bai(?:\s+tap)?|problem|exercise|lop|class|bai nop|submission)\b/', $t)) return false;
+        if (preg_match('/^(?:(?:hay|vui long|giup toi|giup minh|please)\s+)?(?:them\s+test|add\s+(?:a\s+)?test|cham\s*lai|thu\s*lai|(?:bat|tat|an|hien)\s+bai|tao\s+(?:tai khoan|user|nguoi dung))\b/', $t)) return false;
+        if (preg_match('/\b(?:tao|them|soan|sinh|viet|chuan hoa|chat loc|boc tach)\s+(?:(?:giup|cho)\s+(?:toi|minh)\s+)?(?:mot\s+|1\s+)?(?:bai(?:\s*tap)?|de(?:\s*bai)?|problem)\b|\b(?:create|generate|draft)\s+(?:an?\s+)?(?:programming\s+)?(?:problem|exercise)\b|\b(?:dich|translate).*?\b(?:de|bai|problem)\b/', $t)) return true;
+        if (count(preg_split('/\r\n|\r|\n/', $t)) >= 3 && preg_match('/\b(input|output|stdin|dau vao|dau ra|vi du)\b/', $t)) return true;
+        return (bool)preg_match('/(?:^|[\r\n.!?:]\s*)(?:(?:de bai|bai toan)\s*:\s*)?(?:cho\s+(?:hai|ba|mot|so|mang|day|chuoi|do thi|cay|n\b|[a-z]\b)|(?:you are\s+)?given\s+|(?:hay\s+)?(?:tinh|tim|kiem tra)\s+|viet\s+chuong trinh|write\s+(?:a\s+)?program|your task is\s+|(?:calculate|compute|find)\s+(?:the\s+)?)/', $t);
+    }
 
-        // EXISTS giữ mỗi học viên/bài nộp đúng một lần khi có nhiều lớp.
-        if (preg_match('/(bao nhiêu|mấy|thống kê|thong ke|tổng|tong).*(học viên|hoc vien|học sinh|user|tài khoản)/u', $t)
-            || preg_match('/(học viên|hoc vien).*(bao nhiêu|mấy|danh sách|liệt kê)/u', $t)) {
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM users u WHERE u.role = 'student' AND $scope");
-            $stmt->execute($scopeParams);
-            $n = (int)$stmt->fetchColumn();
-            return ['kind' => 'stats', 'answer' => "Hiện có **$n học viên**$scopeLabel."];
+    /** Deterministic Vietnamese help. Links are verified, app-relative routes, not provider output. */
+    public static function help(array $user, string $text): array
+    {
+        if (!self::knownRole($user)) return self::response('Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại.');
+        $t = ChatbotQueries::normalize($text);
+        if (self::requestsPrivateData($t)) return self::response(self::privateDataRefusal()['answer']);
+        if (self::requestsSolution($t)) return self::response(self::solutionRefusal()['answer']);
+        $intent = ChatbotQueries::intent($user, $text);
+        if ($intent !== null && ($denial = ChatbotQueries::denial($user, $intent['query'], $intent['filters'])) !== null) return $denial;
+        return self::knowledge($user, $t) ?? self::response(self::outsideScope());
+    }
+
+    private static function knownRole(array $user): bool
+    {
+        return in_array($user['role'] ?? '', ['student', 'teacher', 'admin'], true);
+    }
+
+    private static function isGuide(string $t): bool
+    {
+        return (bool)preg_match('/\b(?:lam sao|lam the nao|cach\s+(?:nao|dung|su dung|tao|them|sua|doi|xoa|cham|thu|xuat|xem|nop|chay|tham gia|quan ly|khoa|mo)|huong dan|o dau|la gi|nghia la gi|how\s+(?:do|can|to)|where\s+(?:do|can|is)|what\s+(?:is|are|does)|quan ly\s+(?:lop|bai|tai khoan))\b/', $t);
+    }
+
+    private static function startsCreation(string $t): bool
+    {
+        return (bool)preg_match('/^(?:(?:hay|vui long|giup toi|giup minh|toi muon|please|can you)\s+)*(?:tao|them|soan|sinh|viet|chuan hoa|chat loc|boc tach|dich|create|generate|draft|translate)\b/', $t);
+    }
+
+    private static function savedTarget(string $t): bool
+    {
+        return (bool)preg_match('/\b(?:bai|problem|exercise)\s*(?:(?:tap|nop)\s*)?(?:#\s*\d+|(?:co\s+)?id\s*[:=#]?\s*\d+|\d+\b|da luu|da co|hien co)|\b(?:saved|existing)\s+(?:problem|exercise)|\bphien ban\s+(?:moi|thu|so)|\bnew\s+version\b/', $t);
+    }
+
+    private static function isMutation(string $t): bool
+    {
+        if (preg_match('/\b(?:cham\s*lai|rejudge|retry|thu\s*lai\s+(?:run|lan|cham)|(?:tao|them|xoa|khoa|mo khoa|doi quyen|doi vai tro|reset)\s+(?:tai khoan|user|nguoi dung|hoc vien|giao vien)|(?:xuat|export).*\b(?:bao cao|excel|report)|(?:bat|tat|an|hien|xoa)\s+(?:hien thi\s+)?bai|(?:sua|doi|cap nhat)\s+(?:diem|xp|bai da luu)|(?:tao|xoa|doi ten)\s+lop|(?:duyet|tu choi|xoa|them)\s+(?:thanh vien|hoc vien)|(?:create|delete|lock|unlock)\s+(?:user|account|class)|(?:change|set)\s+(?:role|score|xp))\b/', $t)) return true;
+        // Adding a test to a named/saved exercise is retired even while another draft is open.
+        return (bool)preg_match('/\b(?:them|bo sung|add)\s+(?:a\s+)?(?:test|ca kiem thu).*\b(?:cho bai|vao bai|to (?:the )?(?:problem|exercise))\b(?!\s*(?:nhap|draft))/', $t)
+            && !preg_match('/\b(?:ban nhap|draft)\b/', $t);
+    }
+
+    private static function isRevision(string $t): bool
+    {
+        return (bool)preg_match('/^(?:(?:hay|vui long|giup toi|giup minh|please)\s+)*(?:sua|doi|chinh|cap nhat|bo sung|them|xoa|edit|revise|change|update|add|remove)\b.*\b(?:ban nhap|draft|tieu de|title|slug|mo ta|description|dau vao|dau ra|input|output|vi du|sample|test|ca kiem thu|gioi han|thoi gian|time limit|do kho|difficulty|ngon ngu|language|chu de|topic|rang buoc|so am|truong hop bien)\b/', $t);
+    }
+
+    private static function draftRoute(bool $staff, string $t): array
+    {
+        if (!$staff) return self::answered('Tạo và chỉnh sửa bản nháp bài tập chỉ dành cho giáo viên hoặc quản trị viên. Học viên có thể hỏi cách dùng ứng dụng và tra cứu bài tập, bài nộp, tiến độ của chính mình; tôi không giải hộ bài.');
+        // Missing formatting can be completed later; a missing computational goal must not be invented.
+        $t = preg_replace('/\btinh toan\b|\b(?:tinh|tim|kiem tra|dem)\s+(?:gi do|gi|cai gi)\b|\b(?:sample\s+)?(?:input|output|stdin|stdout)\s*[:：]?[^\r\n]*/', '', $t);
+        if (!preg_match('/\b(?:tinh|tim|kiem tra|dem|sap xep|in\s+(?:ra|chuoi|dong|so|hello|loi)|xuat|tong|hieu|tich|thuong|lon nhat|nho nhat|nguyen to|doi xung|phan tu|giai phuong trinh|calculate|compute|find|check|count|sort|print|output\s+\w+|sum|maximum|minimum|prime|palindrome|return\s+\w+)\b/', $t)) {
+            return self::answered('Bạn muốn bài toán yêu cầu tính, tìm, kiểm tra hoặc in kết quả gì? Hãy nêu mục tiêu cốt lõi (ví dụ: tính tổng các phần tử của mảng). Tôi có thể bổ sung định dạng Input/Output, ví dụ và test sau khi mục tiêu rõ ràng.') + ['needs_clarification' => true];
         }
-        if (preg_match('/(bao nhiêu|mấy|tổng).*(bài tập|bai tap|bài|problem)/u', $t)
-            || preg_match('/(bài tập|bài).*(bao nhiêu|mấy|danh sách)/u', $t)) {
-            $n = (int)$pdo->query("SELECT COUNT(*) FROM problems WHERE is_active = 1")->fetchColumn();
-            return ['kind' => 'stats', 'answer' => "Hiện có **$n bài tập** đang hiển thị. Xem chi tiết tại trang Danh sách bài tập."];
+        return ['kind' => 'draft'];
+    }
+
+    private static function requestsPrivateData(string $t): bool
+    {
+        return (bool)preg_match('/\b(?:api[_ ]?key|password[_ ]?hash|otp[_ ]?hash|session[_ ]?(?:token|id)|confirm_token|system_error_detail|error_detail|\.env|bi mat he thong)\b|\b(?:xem|lay|hien|tiet lo|doc|show|reveal|read|give).*\b(?:test\s+(?:an|kin)|hidden\s+tests?|ma nguon|source[_ ]?code|email\s+(?:cua|nguoi|hoc vien)|mat khau\s+(?:cua|nguoi|hoc vien))\b/', $t);
+    }
+
+    private static function requestsSolution(string $t): bool
+    {
+        return (bool)preg_match('/\b(?:giai ho|giai giup|loi giai|code giai|viet code|write\s+(?:the\s+)?code|give\s+(?:me\s+)?(?:the\s+)?(?:code|solution)|cho (?:toi|minh)\s+(?:code|ma nguon)|goi y thuat toan|sua code|debug\s+(?:my\s+)?code|solution code|solve\s+(?:this|the|my)\s+(?:problem|exercise))\b/', $t);
+    }
+
+    private static function privateDataRefusal(): array
+    {
+        return self::answered('Chatbot không cung cấp bí mật hệ thống, test ẩn, mã nguồn, thông tin lỗi nội bộ hoặc thông tin riêng như email của người khác. Tôi chỉ tra cứu thông tin tổng hợp và kết quả được phép xem.');
+    }
+
+    private static function solutionRefusal(): array
+    {
+        return self::answered('Tôi không cung cấp lời giải, code giải hộ, gợi ý thuật toán hoặc sửa code. Tôi có thể giải thích trạng thái chấm, hướng dẫn chạy thử/nộp bài và giúp tra cứu trong AlgoJudge.');
+    }
+
+    private static function knowledge(array $user, string $t): ?array
+    {
+        $role = $user['role'];
+        $staff = in_array($role, ['teacher', 'admin'], true);
+        $adminFeature = preg_match('/\b(?:quan tri|admin|quan ly tai khoan|tao tai khoan|them tai khoan|doi quyen|doi vai tro|khoa tai khoan|xoa tai khoan|reset mat khau|dat lai mat khau.*nguoi)\b/', $t);
+        if ($adminFeature && $role !== 'admin') return self::response('Chức năng quản trị tài khoản chỉ dành cho quản trị viên. Tôi không hướng dẫn thao tác quản trị ngoài quyền của bạn. Với tài khoản của mình, bạn có thể dùng Hồ sơ hoặc Quên mật khẩu.', [['Hồ sơ', '/frontend/profile.php']]);
+        $staffFeature = preg_match('/\b(?:tao bai|them bai|soan de|ban nhap|draft|quan ly bai|bo test|bo du lieu|phien ban|cham lai|rejudge|thu lai run|tien do hoc vien|quan ly lop|duyet.*(?:lop|thanh vien)|tao lop|them hoc vien|xuat bao cao|hang doi|queue)\b/', $t);
+        if ($staffFeature && !$staff) return self::response('Học viên không có quyền sử dụng nghiệp vụ giảng dạy hoặc quản trị. Tôi có thể hướng dẫn danh sách bài, workspace, chạy thử, nộp bài, lịch sử, lớp học và tiến độ của chính bạn.', [['Danh sách bài tập', '/frontend/index.php'], ['Lớp học của tôi', '/frontend/instructor/classes.php']]);
+
+        if ($adminFeature) return self::response('Mở Quản lý tài khoản để lọc theo vai trò hoặc tìm tài khoản. Dùng trang Thêm tài khoản để tạo tài khoản; các thao tác đổi quyền, khóa, đặt lại mật khẩu hoặc xóa được thực hiện trên màn hình quản trị với kiểm tra quyền. Quản lý lớp dùng màn hình riêng. Chatbot chỉ hướng dẫn, không thực hiện các thay đổi này.', [['Quản lý tài khoản', '/frontend/admin/users.php'], ['Thêm tài khoản', '/frontend/admin/user_form.php'], ['Quản lý lớp', '/frontend/instructor/classes.php']]);
+        if ($staff && preg_match('/\b(?:tao bai|them bai|soan de|ban nhap|draft|create.*problem|add.*problem)\b/', $t)) return self::response('Dán đề bài có mục tiêu rõ ràng vào chat để biên soạn bản nháp. Kiểm tra và sửa mô tả, Input/Output, ví dụ, giới hạn và test ngay trong bản xem trước. Chỉ nút Thêm bài trên bản nháp mới nhất đã duyệt mới lưu bài thật; nhắn OK hoặc “thêm luôn” không lưu. Bạn vẫn có thể tạo bài thủ công trên trang Thêm bài.', [['Thêm bài thủ công', '/frontend/instructor/problem_form.php']]);
+        if ($staff && preg_match('/\b(?:bo test|test case|bo du lieu|phien ban|dataset|version)\b/', $t)) return self::response('Mở Bộ Test & Phiên bản, chọn bài, xem phiên bản hiện có rồi nhập giới hạn/changelog và dữ liệu test bổ sung khi cần. Màn hình tạo phiên bản mới và giữ lịch sử cũ; chấm lại là thao tác ở màn hình riêng. Chatbot không sửa test hoặc tạo phiên bản cho bài đã lưu.', [['Bộ Test & Phiên bản', '/frontend/instructor/dataset_versions.php'], ['Chấm lại & đối chiếu', '/frontend/instructor/rejudge.php']]);
+        if ($staff && preg_match('/\b(?:cham lai|rejudge|doi chieu)\b/', $t)) return self::response('Mở Chấm lại & đối chiếu, lọc bài và chọn bài nộp trong phạm vi được phép. Thao tác trên màn hình tạo lượt chấm mới với bộ test hiện hành và giữ các kết quả cũ để so sánh. Giáo viên chỉ xem học viên có membership active trong lớp mình sở hữu. Chatbot không chấm lại.', [['Chấm lại & đối chiếu', '/frontend/instructor/rejudge.php']]);
+        if ($staff && preg_match('/\b(?:hang doi|queue|thu lai|run ket)\b/', $t)) return self::response('Hàng đợi chấm hiển thị lượt QUEUED, RUNNING và SYS_ERROR trong phạm vi được phép. Có thể xem lượt lỗi/kẹt và dùng nút Thử lại trên màn hình khi đủ điều kiện. Thử lại tạo lượt mới, không xóa lịch sử; chatbot không điều khiển hàng đợi.', [['Hàng đợi chấm', '/frontend/instructor/queue.php']]);
+        if ($staff && preg_match('/\b(?:tien do|hoc vien|bao cao|excel)\b/', $t) && !preg_match('/\b(?:lop|tham gia)\b/', $t)) return self::response('Mở Tiến độ học viên, chọn lớp được phép quản lý và lọc username khi cần. Trang hiển thị số lượt nộp, bài đang hiển thị đã AC và lần nộp gần nhất; nút Xuất Excel xuất theo bộ lọc của màn hình. Học viên thuộc nhiều lớp không được đếm lặp khi xem phạm vi chung. Chatbot không thực thi xuất báo cáo.', [['Tiến độ học viên', '/frontend/instructor/progress.php']]);
+        if (preg_match('/\b(?:lop|membership|ma moi|join code|class)\b/', $t)) {
+            if (!$staff) return self::response('Mở Lớp học của tôi để xem các lớp bạn đang là thành viên active. Mục Tham gia lớp cho nhập mã mời do giáo viên cung cấp; theo dõi trạng thái tại Yêu cầu của tôi và chờ được duyệt. Tham gia lớp không cấp quyền xem bài nộp riêng của người khác.', [['Lớp học của tôi', '/frontend/instructor/classes.php'], ['Tham gia lớp', '/frontend/instructor/classes.php?view=join'], ['Yêu cầu của tôi', '/frontend/instructor/classes.php?view=requests']]);
+            if (preg_match('/\b(?:tien do|bao cao|excel)\b/', $t)) return self::response('Mở Tiến độ học viên và chọn đúng lớp theo ID; giáo viên chỉ dùng lớp mình sở hữu và học viên có membership active. Xem tổng lượt nộp, số bài đã AC, lần nộp cuối; xuất Excel bằng nút trên màn hình nếu cần. Chatbot chỉ tra cứu và hướng dẫn, không xuất báo cáo thay bạn.', [['Tiến độ học viên', '/frontend/instructor/progress.php'], ['Quản lý lớp', '/frontend/instructor/classes.php']]);
+            return self::response('Mở Quản lý lớp, chọn lớp thuộc quyền để xem thành viên/yêu cầu. Trên màn hình có thể tạo lớp, chia sẻ/kích hoạt/đổi mã mời, thêm học viên theo username, duyệt/từ chối yêu cầu hoặc đưa học viên ra khỏi lớp. Giáo viên chỉ quản lý lớp mình sở hữu; admin có thể gán chủ quản. Các thay đổi không được thực hiện bằng lệnh chat.', [['Quản lý lớp', '/frontend/instructor/classes.php']]);
         }
-        if (preg_match('/(hàng đợi|hang doi|queue|đang chấm|dang cham|chờ chấm|cho cham)/u', $t)) {
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM judging_runs jr JOIN submissions s ON s.id = jr.submission_id JOIN users u ON u.id = s.user_id WHERE jr.status IN ('QUEUED','RUNNING') AND $scope");
-            $stmt->execute($scopeParams);
-            $q = (int)$stmt->fetchColumn();
-            return ['kind' => 'stats', 'answer' => "Hàng đợi chấm$scopeLabel hiện có **$q lượt** đang chờ/xử lý."];
-        }
-        if (preg_match('/(bài.*(sai|khó|rớt|rot|wa nhiều)|wa nhiều|khó nhất|ty le|tỉ lệ)/u', $t)) {
-            $stmt = $pdo->prepare("
-                SELECT p.id, p.title,
-                       SUM(s.final_verdict = 'AC') AS ac, COUNT(*) AS total
-                FROM submissions s JOIN problems p ON p.id = s.problem_id
-                JOIN users u ON u.id = s.user_id
-                WHERE $scope
-                GROUP BY p.id HAVING total >= 3 ORDER BY ac / total ASC LIMIT 5
-            ");
-            $stmt->execute($scopeParams);
-            $rows = $stmt->fetchAll();
-            if (!$rows) return ['kind' => 'stats', 'answer' => 'Chưa đủ dữ liệu nộp bài trong phạm vi được phép để đánh giá bài khó nhất.'];
-            $out = "Top bài tỉ lệ AC thấp nhất$scopeLabel:\n";
-            foreach ($rows as $r) {
-                $rate = $r['total'] ? round($r['ac'] / $r['total'] * 100, 1) : 0;
-                $out .= "- #{$r['id']} {$r['title']}: {$rate}% AC ({$r['ac']}/{$r['total']})\n";
-            }
-            return ['kind' => 'stats', 'answer' => $out];
-        }
-        if (preg_match('/(tiến độ|tien do|điểm|diem|kết quả|ket qua).*(lớp|lop|class)/u', $t)
-            || preg_match('/(lớp|lop).*(tiến độ|điểm|thế nào|ra sao)/u', $t)) {
-            $stmt = $pdo->prepare("
-                SELECT SUM(s.final_verdict = 'AC') AS ac, COUNT(*) AS total
-                FROM submissions s JOIN users u ON u.id = s.user_id WHERE $scope
-            ");
-            $stmt->execute($scopeParams);
-            $rows = $stmt->fetch();
-            $total = (int)($rows['total'] ?? 0);
-            $ac = (int)($rows['ac'] ?? 0);
-            $rate = $total ? round($ac / $total * 100, 1) : 0;
-            return ['kind' => 'stats', 'answer' => "Tiến độ$scopeLabel: $total lượt nộp, $ac lượt AC (**$rate%**). Muốn chi tiết từng bạn, bấm Xuất báo cáo hoặc vào trang Tiến độ học viên."];
+        if ($staff && preg_match('/\b(?:quan ly bai|an bai|hien bai|tat bai|bat bai|xoa bai|sua bai)\b/', $t)) return self::response('Mở Quản lý bài tập để xem các bài, bật/tắt hiển thị hoặc mở form chỉnh sửa. Xóa bài chỉ dành cho admin trên màn hình này. Thay đổi bài hoặc bộ test đã lưu không được thực hiện qua chat; bản nháp bài mới là luồng riêng.', [['Quản lý bài tập', '/frontend/instructor/problems.php']]);
+        if (preg_match('/\b(?:ac|wa|tle|re|ce|sys_err|queued|running)\b/', $t)) return self::response('AC: vượt qua bộ test. WA: kết quả không đúng. TLE: vượt giới hạn thời gian. RE: lỗi khi chạy. CE: biên dịch không thành công. SYS_ERR: lỗi hệ thống chấm, không đồng nghĩa bài sai. QUEUED/RUNNING: đang chờ/đang chấm. Xem kết quả và lịch sử tại Lịch sử nộp bài hoặc trong workspace; không cần nộp dồn khi đang chờ.', [['Lịch sử nộp bài', '/frontend/submissions.php']]);
+        if (preg_match('/\b(?:san choi|playground)\b/', $t)) return self::response('Sân chơi tự do cho viết và chạy thử chương trình với dữ liệu tự nhập, không cần chọn bài tập. Chọn ngôn ngữ, nhập chương trình và input rồi chạy; đây không phải nộp bài để nhận AC cho một bài tập.', [['Sân chơi tự do', '/frontend/playground.php']]);
+        if (preg_match('/\b(?:bang xep hang|leaderboard|thu hang)\b/', $t)) return self::response('Bảng xếp hạng hiển thị XP của học viên và thống kê luyện tập. Bạn có thể chọn bộ lọc lớp được phép xem; giáo viên chỉ xem các lớp mình quản lý.', [['Bảng xếp hạng', '/frontend/leaderboard.php']]);
+        if (preg_match('/\b(?:ho so|xp|mat khau|profile|quen mat khau|email)\b/', $t)) return self::response('Hồ sơ hiển thị thông tin cá nhân, XP và thống kê của tài khoản. Đổi email/mật khẩu qua form trong Hồ sơ với xác thực hiện có và OTP khi được cấu hình. Nếu không đăng nhập được, dùng Quên mật khẩu. Không gửi mật khẩu hoặc OTP vào chat.', [['Hồ sơ', '/frontend/profile.php'], ['Quên mật khẩu', '/frontend/auth/forgot_password.php']]);
+        if (preg_match('/\b(?:lich su|bai nop|lan nop|ket qua|diem|submissions?)\b/', $t)) return self::response('Mở Lịch sử nộp bài để lọc theo bài hoặc kết quả chấm và xem trạng thái, điểm, số ca đúng. Học viên chỉ xem bài nộp của chính mình. Trong workspace, tab Kết quả & Lịch sử chấm cho theo dõi bài vừa nộp và các lần chấm.', [['Lịch sử nộp bài', '/frontend/submissions.php'], ['Danh sách bài tập', '/frontend/index.php']]);
+        if (preg_match('/\b(?:workspace|chay thu|nop bai|ngon ngu|c\+\+|python|java|javascript|php|stdin|stdout)\b/', $t)) return self::response('Từ Danh sách bài tập, chọn bài để mở workspace. Đọc đề và ví dụ, chọn C/C++/Java/Python/PHP/JS, nhập chương trình. Chạy thử dùng Custom Input của bạn; Nộp bài gửi chương trình vào hàng đợi chấm với bộ test của bài. Theo dõi kết quả trong workspace hoặc Lịch sử nộp bài.', [['Danh sách bài tập', '/frontend/index.php'], ['Lịch sử nộp bài', '/frontend/submissions.php']]);
+        if (preg_match('/\b(?:danh sach bai|bai tap|luyen tap|chu de|do kho|problem list)\b/', $t)) return self::response('Danh sách bài tập cho lọc theo chủ đề, độ khó và ngôn ngữ gợi ý. Chọn tên bài hoặc nút Làm bài/Xem để mở workspace. Học viên thấy tiến độ hoàn thành các bài đang hiển thị.', [['Danh sách bài tập', '/frontend/index.php']]);
+        if (preg_match('/^(?:xin chao|chao|hello|hi|help|tro giup|ban (?:lam|giup) duoc gi|chatbot|algojudge)[!?.\s]*$/', $t) || preg_match('/\b(?:tinh nang|su dung algojudge|ve ung dung)\b/', $t)) {
+            $links = [['Danh sách bài tập', '/frontend/index.php'], ['Lịch sử nộp bài', '/frontend/submissions.php'], ['Lớp học', '/frontend/instructor/classes.php']];
+            if ($staff) $links[] = ['Tiến độ học viên', '/frontend/instructor/progress.php'];
+            if ($role === 'admin') $links[] = ['Quản lý tài khoản', '/frontend/admin/users.php'];
+            return self::response('Tôi hỗ trợ cách dùng AlgoJudge và tra cứu dữ liệu trong quyền của bạn: bài tập, bài nộp, tiến độ và lớp học.' . ($staff ? ' Giáo viên/admin có thể dán đề rõ mục tiêu để tạo và sửa bản nháp; chỉ bấm Thêm bài mới lưu bài thật.' : '') . ' Tôi không giải hộ bài hoặc thực hiện các thao tác thay đổi dữ liệu bằng lệnh chat.', $links);
         }
         return null;
     }
 
-    // ---------- Trích tham số từ câu tự nhiên ----------
-
-    private static function extractUserFields(string $text): array
+    private static function outsideScope(): string
     {
-        $f = ['full_name' => '', 'username' => '', 'email' => '', 'role' => 'student', 'class_code' => ''];
-        if (preg_match('/tên\s+(là\s+)?([^,\n]+)/iu', $text, $m)) $f['full_name'] = trim($m[2]);
-        if (preg_match('/username\s*(là\s+)?([a-zA-Z0-9_]{3,50})/i', $text, $m)) $f['username'] = $m[2];
-        if (preg_match('/[\w.+-]+@[\w-]+\.[\w.]+/', $text, $m)) $f['email'] = $m[0];
-        if (preg_match('/giáo viên|giao vien|teacher/u', mb_strtolower($text))) $f['role'] = 'teacher';
-        // Không gán membership từ tên/mã lớp tự do khi tạo tài khoản.
-        if (preg_match('/(?<![\pL\pN_])(?:lớp|lop|class(?:_code|_id)?)(?:\s*[:=#]\s*|\s+)([^,\n]+)/iu', $text, $m)) $f['class_code'] = trim($m[1]);
-        return $f;
+        return 'Tôi chỉ hỗ trợ cách dùng và tra cứu dữ liệu AlgoJudge theo quyền đăng nhập, không trả lời kiến thức ngoài ứng dụng hoặc giải hộ bài. Bạn có thể hỏi cách nộp bài, ý nghĩa AC/WA, tìm bài theo chủ đề, bài nộp gần nhất hoặc tiến độ của mình.';
     }
 
-    private static function extractProblemRef(string $text): array
+    private static function answered(string $answer): array
     {
-        $f = ['ref' => ''];
-        if (preg_match('/bài\s*(số\s*)?#?(\d+)/iu', $text, $m)) $f['ref'] = $m[2];
-        elseif (preg_match('/["“](.+?)["”]/u', $text, $m)) $f['ref'] = trim($m[1]);
-        return $f;
+        return ['kind' => 'answer'] + self::response($answer);
     }
 
-    private static function extractTestFields(string $text): array
+    /** Internal links are literal known routes; never accept a URL from chat or model output. */
+    private static function response(string $answer, array $links = []): array
     {
-        $f = self::extractProblemRef($text);
-        $f += ['stdin' => '', 'expected' => '', 'is_public' => false];
-        if (preg_match('/input\s*[:：]\s*([^\n;]+)/iu', $text, $m)) $f['stdin'] = trim($m[1]);
-        if (preg_match('/output\s*[:：]\s*([^\n;]+)/iu', $text, $m)) $f['expected'] = trim($m[1]);
-        if (preg_match('/công khai|cong khai|public/u', mb_strtolower($text))) $f['is_public'] = true;
-        return $f;
-    }
-
-    private static function extractSubmissionRef(string $text): array
-    {
-        $f = ['submission_id' => 0];
-        if (preg_match('/(nộp|submit|bài nộp)[^0-9]*#?(\d+)/iu', $text, $m)) $f['submission_id'] = (int)$m[2];
-        elseif (preg_match('/#(\d+)/', $text, $m)) $f['submission_id'] = (int)$m[1];
-        return $f;
-    }
-
-    private static function extractRunRef(string $text): array
-    {
-        $f = ['run_id' => 0];
-        if (preg_match('/run[^0-9]*#?(\d+)/iu', $text, $m)) $f['run_id'] = (int)$m[1];
-        elseif (preg_match('/(lần chấm|lần)[^0-9]*#?(\d+)/iu', $text, $m)) $f['run_id'] = (int)$m[2];
-        return $f;
-    }
-
-    private static function extractClassRef(string $text): array
-    {
-        $f = ['class_id' => 0];
-        if (preg_match('/(?<![\pL\pN_])(?:class_id|(?:lớp|lop|class)(?:\s+id)?)(?:\s*[:=#]\s*|\s+)([1-9]\d*)(?![\pL\pN_.-])/iu', $text, $m)) {
-            $f['class_id'] = (int)$m[1];
-        } elseif (preg_match('/(?<![\pL\pN_])(?:lớp|lop|class(?:_code|_id)?)(?:\s*[:=#]\s*|\s+)(\S.*)$/iu', $text, $m)
-            && !preg_match('/^(?:tôi|toi|mình|minh|của\s+(?:tôi|mình)|cua\s+toi)(?:\s|[.!?]|$)/iu', trim($m[1]))) {
-            $f['class_ref'] = trim($m[1]);
-        }
-        return $f;
-    }
-
-    // ---------- Xác nhận 2 bước ----------
-
-    /** Tạo confirm_token lưu session, trả về tóm tắt để bot hỏi lại. */
-    private static function needConfirm(string $action, array $params, array $user): array
-    {
-        if (!isset(self::ACTIONS[$action])) throw new Exception('Thao tác không được phép.');
-        // Phân quyền: chỉ admin được tạo tài khoản
-        if ($action === 'create_user' && $user['role'] !== 'admin') {
-            return ['kind' => 'qa', 'answer' => 'Chỉ quản trị viên mới được tạo tài khoản. Thầy/cô liên hệ admin nhé.'];
-        }
-        $missing = self::validateParams($action, $params, $user);
-        if ($missing !== '') {
-            return ['kind' => 'qa', 'answer' => $missing]; // thiếu info → hỏi bổ sung, chưa tạo token
-        }
-        $token = bin2hex(random_bytes(16));
-        $_SESSION['ai_pending'][$token] = ['action' => $action, 'params' => $params, 'at' => time()];
-        return ['kind' => 'confirm', 'token' => $token, 'action' => $action,
-                'summary' => self::summarize($action, $params)];
-    }
-
-    /** Kiểm tra tham số đủ chưa; trả '' nếu đủ, ngược lại trả câu hỏi bổ sung. */
-    public static function validateParams(string $action, array $params, array $user): string
-    {
-        if (!isset(self::ACTIONS[$action])) return 'Thao tác không được phép.';
-        if (!in_array($user['role'], ['teacher', 'admin'], true)) return 'Chức năng này dành cho giảng viên và quản trị viên.';
-        switch ($action) {
-            case 'create_user':
-                if ($user['role'] !== 'admin') return 'Chỉ admin được tạo tài khoản.';
-                if (trim((string)($params['class_code'] ?? '')) !== '' || !empty($params['class_id'])) {
-                    return 'Không gán lớp bằng tên/mã tự do khi tạo tài khoản. Hãy tạo tài khoản không kèm lớp, sau đó thêm học viên tại [Quản lý lớp](' . url('/frontend/instructor/classes.php') . ').';
-                }
-                if (empty($params['full_name'])) return 'Cho tôi biết **họ tên** của tài khoản mới nhé. (VD: tạo tài khoản tên Nguyễn Văn A, username avan, email a@x.vn)';
-                if (!preg_match('/^[a-zA-Z0-9_]{3,50}$/', (string)($params['username'] ?? ''))) return 'Cho tôi biết **username** (chữ/số/gạch dưới, 3–50 ký tự) nhé.';
-                if (empty($params['email']) || !filter_var($params['email'], FILTER_VALIDATE_EMAIL)) return 'Cho tôi biết **email** hợp lệ nhé.';
-                if (!in_array($params['role'] ?? '', ['student', 'teacher'], true)) return 'Chỉ tạo tài khoản học viên hoặc giáo viên qua trợ lý.';
-                return '';
-            case 'add_test_case':
-                if (empty($params['ref'])) return 'Thêm test cho **bài nào**? (VD: thêm test cho bài #3, input: 1 2, output: 3)';
-                if (($params['stdin'] ?? '') === '' || ($params['expected'] ?? '') === '') return 'Cho tôi biết **input và output** của test nhé. (VD: input: 2 3, output: 5)';
-                return '';
-            case 'toggle_problem':
-                if (empty($params['ref'])) return 'Bật/tắt **bài nào**? Cho tôi số ID hoặc tên bài nhé. (VD: ẩn bài #5)';
-                return '';
-            case 'rejudge':
-                if (empty($params['submission_id'])) return 'Chấm lại **bài nộp nào**? Cho tôi ID bài nộp nhé. (VD: chấm lại bài nộp #12)';
-                return '';
-            case 'retry_run':
-                if (empty($params['run_id'])) return 'Thử lại **lần chấm (run) nào**? Cho tôi ID run nhé.';
-                return '';
-            case 'export_progress':
-                if (trim((string)($params['class_code'] ?? '')) !== '' || trim((string)($params['class_ref'] ?? '')) !== '') {
-                    return 'Báo cáo dùng **ID lớp**, không dùng mã lớp cũ. Xem ID tại [Quản lý lớp](' . url('/frontend/instructor/classes.php') . ') rồi yêu cầu, ví dụ: xuất báo cáo lớp #12.';
-                }
-                $classId = filter_var($params['class_id'] ?? 0, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
-                if ($classId === false) return 'ID lớp không hợp lệ.';
-                if ($classId > 0) {
-                    if ($user['role'] === 'teacher' && !Auth::teacherOwnsClass((int)$user['id'], $classId)) return 'Bạn không quản lý lớp này.';
-                    global $pdo;
-                    $stmt = $pdo->prepare('SELECT id FROM classes WHERE id = ?');
-                    $stmt->execute([$classId]);
-                    if (!$stmt->fetchColumn()) return 'Không tìm thấy lớp này.';
-                }
-                return ''; // Không chọn lớp: endpoint giới hạn theo vai trò/membership.
-        }
-        return '';
-    }
-
-    public static function summarize(string $action, array $params): string
-    {
-        switch ($action) {
-            case 'create_user':
-                $role = $params['role'] === 'teacher' ? 'giáo viên' : 'học viên';
-                return "Tạo tài khoản **{$params['full_name']}** (@{$params['username']}, {$params['email']}, vai trò $role, chưa tham gia lớp, mật khẩu khởi tạo ngẫu nhiên). Thêm học viên vào lớp qua trang Quản lý lớp sau khi tạo.";
-            case 'add_test_case':
-                $pub = !empty($params['is_public']) ? 'công khai' : 'kín';
-                return "Thêm test case ($pub) cho bài **{$params['ref']}**: input `{$params['stdin']}` → output `{$params['expected']}` (tạo phiên bản đề mới).";
-            case 'toggle_problem':
-                return "Đổi trạng thái hiển thị (bật ↔ tắt) của bài **{$params['ref']}**.";
-            case 'rejudge':
-                return "Chấm lại bài nộp **#{$params['submission_id']}** trên bộ test mới nhất (giữ lịch sử cũ).";
-            case 'retry_run':
-                return "Thử lại lần chấm (run) **#{$params['run_id']}** (chỉ được với run lỗi/kẹt).";
-            case 'export_progress':
-                $classId = (int)($params['class_id'] ?? 0);
-                $cls = $classId > 0 ? " lớp #$classId" : ' trong phạm vi được phép';
-                return "Xuất báo cáo tiến độ$cls ra file Excel.";
-        }
-        return $action;
-    }
-
-    /** Thực thi thao tác đã xác nhận. Chỉ chạy khi token hợp lệ. */
-    public static function execute(array $user, string $token): array
-    {
-        $p = $_SESSION['ai_pending'][$token] ?? null;
-        if (!$p) throw new Exception('Yêu cầu đã hết hạn — hãy nói lại từ đầu nhé.');
-        if (time() - $p['at'] > 600) {
-            unset($_SESSION['ai_pending'][$token]);
-            throw new Exception('Đã quá 10 phút — hãy nói lại từ đầu để tôi làm lại nhé.');
-        }
-        unset($_SESSION['ai_pending'][$token]);
-        global $pdo;
-        $action = $p['action'];
-        $params = $p['params'];
-        // Thao tác GHI chỉ dành cho giảng viên/admin
-        if (!in_array($user['role'], ['teacher', 'admin'], true)) {
-            throw new Exception('Chức năng này dành cho giảng viên.');
-        }
-        $missing = self::validateParams($action, $params, $user);
-        if ($missing !== '') throw new Exception($missing);
-
-        if ($action === 'export_progress') {
-            $classId = (int)($params['class_id'] ?? 0);
-            $q = http_build_query(array_filter(['type' => 'progress', 'class_id' => $classId ?: null]));
-            $link = url('/backend/api/export_excel.php?' . $q);
-            return ['ok' => true, 'answer' => "Bấm để tải báo cáo tiến độ" . ($classId > 0 ? " lớp #$classId" : ' trong phạm vi được phép') . ": [Tải Excel]($link)"];
-        }
-        // This entry point owns its commit: a judge must never run in an outer transaction.
-        if ($pdo->inTransaction()) throw new LogicException('AI action requires its own transaction.');
-        $pdo->beginTransaction();
-        $auditMetadata = ['source' => 'ai'];
-        $queuedRunId = null;
-        try {
-            switch ($action) {
-                case 'create_user': {
-                    $chk = $pdo->prepare('SELECT id FROM users WHERE username = ? OR email = ?');
-                    $chk->execute([$params['username'], $params['email']]);
-                    if ($chk->fetch()) throw new DomainException('Username hoặc email đã tồn tại.');
-                    $initialPassword = bin2hex(random_bytes(12));
-                    $hash = password_hash($initialPassword, PASSWORD_DEFAULT);
-                    $pdo->prepare("INSERT INTO users (username, email, password_hash, full_name, role, class_code) VALUES (?, ?, ?, ?, ?, '')")
-                        ->execute([$params['username'], $params['email'], $hash, $params['full_name'], $params['role']]);
-                    $targetId = (int)$pdo->lastInsertId();
-                    $auditAction = 'user.create';
-                    $targetType = 'user';
-                    $auditMetadata['role'] = $params['role'];
-                    $classLink = url('/frontend/instructor/classes.php');
-                    $answer = "Đã tạo tài khoản **{$params['full_name']}** (@{$params['username']}) — mật khẩu khởi tạo `$initialPassword`. Chuyển riêng cho chủ tài khoản và yêu cầu đổi mật khẩu trong Hồ sơ; không chia sẻ cuộc trò chuyện này. Tài khoản chưa tham gia lớp. Thêm học viên tại [Quản lý lớp]($classLink).";
-                    break;
-                }
-                case 'add_test_case': {
-                    $pr = self::findProblem($params['ref']);
-                    if (!$pr) throw new DomainException("Không tìm thấy bài '{$params['ref']}'.");
-                    $stmtLatest = $pdo->prepare('SELECT version_number FROM problem_versions WHERE problem_id = ? ORDER BY version_number DESC LIMIT 1 FOR UPDATE');
-                    $stmtLatest->execute([(int)$pr['id']]);
-                    $latestNumber = $stmtLatest->fetchColumn();
-                    if ($latestNumber === false) throw new DomainException('Không tìm thấy phiên bản bộ test.');
-                    $verNum = (int)$latestNumber + 1;
-                    $stmtNew = $pdo->prepare("INSERT INTO problem_versions (problem_id, version_number, description, input_desc, output_desc, sample_input, sample_output, time_limit_ms, changelog, created_by) SELECT ?, ?, description, input_desc, output_desc, sample_input, sample_output, time_limit_ms, 'AI chatbot: thêm test case', ? FROM problem_versions WHERE id = ? AND problem_id = ?");
-                    $stmtNew->execute([$pr['id'], $verNum, $user['id'], $pr['current_version_id'], $pr['id']]);
-                    if ($stmtNew->rowCount() !== 1) throw new DomainException('Không có phiên bản bộ test hợp lệ cho bài tập này.');
-                    $verId = (int)$pdo->lastInsertId();
-                    $pdo->prepare('INSERT INTO test_cases (problem_version_id, case_order, stdin_data, expected_output, is_public, is_boundary, points) SELECT ?, case_order, stdin_data, expected_output, is_public, is_boundary, points FROM test_cases WHERE problem_version_id = ? ORDER BY case_order')
-                        ->execute([$verId, $pr['current_version_id']]);
-                    $ord = (int)$pdo->query("SELECT COALESCE(MAX(case_order),0)+1 FROM test_cases WHERE problem_version_id = $verId")->fetchColumn();
-                    $pdo->prepare('INSERT INTO test_cases (problem_version_id, case_order, stdin_data, expected_output, is_public, is_boundary, points) VALUES (?, ?, ?, ?, ?, 0, 20)')
-                        ->execute([$verId, $ord, $params['stdin'], $params['expected'], !empty($params['is_public']) ? 1 : 0]);
-                    $pdo->prepare('UPDATE problems SET current_version_id = ? WHERE id = ?')->execute([$verId, $pr['id']]);
-                    $auditAction = 'dataset.create';
-                    $targetType = 'problem';
-                    $targetId = (int)$pr['id'];
-                    $auditMetadata['version_number'] = $verNum;
-                    $answer = "Đã thêm test case cho bài **{$pr['title']}** (phiên bản mới v$verNum).";
-                    break;
-                }
-                case 'toggle_problem': {
-                    $pr = self::findProblem($params['ref']);
-                    if (!$pr) throw new DomainException("Không tìm thấy bài '{$params['ref']}'.");
-                    $newActive = (int)$pr['is_active'] === 1 ? 0 : 1;
-                    $pdo->prepare('UPDATE problems SET is_active = ? WHERE id = ?')->execute([$newActive, $pr['id']]);
-                    $auditAction = $newActive ? 'problem.enable' : 'problem.disable';
-                    $targetType = 'problem';
-                    $targetId = (int)$pr['id'];
-                    $new = $newActive ? 'hiển thị' : 'đang ẩn';
-                    $answer = "Bài **{$pr['title']}** giờ $new.";
-                    break;
-                }
-                case 'rejudge':
-                case 'retry_run': {
-                    $isRetry = $action === 'retry_run';
-                    $rid = $isRetry ? (int)$params['run_id'] : 0;
-                    if ($isRetry) {
-                        $stmtParent = $pdo->prepare('SELECT submission_id FROM judging_runs WHERE id = ?');
-                        $stmtParent->execute([$rid]);
-                        $sid = (int)$stmtParent->fetchColumn();
-                        if ($sid <= 0) throw new DomainException("Không tìm thấy run #$rid.");
-                    } else {
-                        $sid = (int)$params['submission_id'];
-                    }
-                    // Shared lock order with the HTTP rejudge/retry endpoints.
-                    $stmtSub = $pdo->prepare('SELECT * FROM submissions WHERE id = ? FOR UPDATE');
-                    $stmtSub->execute([$sid]);
-                    $sub = $stmtSub->fetch();
-                    if (!$sub) throw new DomainException("Không tìm thấy bài nộp #$sid.");
-                    if (!Auth::canViewSubmission($user, ['id' => (int)$sub['user_id']])) throw new DomainException('Bạn không có quyền chấm lại bài nộp này.');
-                    if ($isRetry) {
-                        $stmtRun = $pdo->prepare('SELECT * FROM judging_runs WHERE id = ? AND submission_id = ? FOR UPDATE');
-                        $stmtRun->execute([$rid, $sid]);
-                        $r = $stmtRun->fetch();
-                        if (!$r) throw new DomainException("Không tìm thấy run #$rid.");
-                        if (!in_array($r['status'], ['SYS_ERROR', 'QUEUED', 'RUNNING'], true)) throw new DomainException("Run #$rid đã xong bình thường — chỉ thử lại được run lỗi/kẹt.");
-                        $stmtVersion = $pdo->prepare('SELECT id, version_number FROM problem_versions WHERE id = ? AND problem_id = ?');
-                        $stmtVersion->execute([(int)$r['problem_version_id'], (int)$sub['problem_id']]);
-                    } else {
-                        $stmtVersion = $pdo->prepare('SELECT pv.id, pv.version_number FROM problems p JOIN problem_versions pv ON pv.id = p.current_version_id AND pv.problem_id = p.id WHERE p.id = ?');
-                        $stmtVersion->execute([(int)$sub['problem_id']]);
-                    }
-                    $version = $stmtVersion->fetch();
-                    if (!$version) throw new DomainException('Không có phiên bản bộ test hợp lệ cho bài tập này.');
-                    $dup = $pdo->prepare("SELECT id FROM judging_runs WHERE submission_id = ? AND id <> ? AND status IN ('QUEUED','RUNNING') LIMIT 1 FOR UPDATE");
-                    $dup->execute([$sid, $rid]);
-                    if ($dup->fetch()) throw new DomainException("Bài nộp #$sid đang có lượt chấm khác chờ/xử lý — đợi xong rồi thử lại.");
-                    $stmtLatest = $pdo->prepare('SELECT id, run_number FROM judging_runs WHERE submission_id = ? ORDER BY run_number DESC, id DESC LIMIT 1 FOR UPDATE');
-                    $stmtLatest->execute([$sid]);
-                    $latest = $stmtLatest->fetch();
-                    if ($isRetry && (!$latest || (int)$latest['id'] !== $rid)) throw new DomainException('Lần chấm này đã được thay thế. Hãy dùng lần chấm mới nhất.');
-                    $runNum = (int)($latest['run_number'] ?? 0) + 1;
-                    require_once __DIR__ . '/JudgeEngine.php';
-                    $pdo->prepare("INSERT INTO judging_runs (submission_id, problem_version_id, run_number, trigger_type, triggered_by, status, verdict) VALUES (?, ?, ?, ?, ?, 'QUEUED', 'PENDING')")
-                        ->execute([$sid, (int)$version['id'], $runNum, $isRetry ? 'SYS_RETRY' : 'REJUDGE', $user['id']]);
-                    $queuedRunId = (int)$pdo->lastInsertId();
-                    if ($isRetry) {
-                        $pdo->prepare("UPDATE judging_runs SET status = 'SYS_ERROR', verdict = 'SYS_ERR', system_error_detail = CONCAT(COALESCE(system_error_detail, ''), ' | Superseded by retry run #', ?), finished_at = COALESCE(finished_at, NOW()) WHERE id = ?")
-                            ->execute([$queuedRunId, $rid]);
-                        $auditMetadata['previous_run_id'] = $rid;
-                    }
-                    $auditAction = $isRetry ? 'judge.retry' : 'judge.rejudge';
-                    $targetType = 'run';
-                    $targetId = $queuedRunId;
-                    $auditMetadata += ['submission_id' => $sid, 'problem_id' => (int)$sub['problem_id'], 'version_number' => (int)$version['version_number']];
-                    break;
-                }
-                default:
-                    throw new DomainException('Thao tác không được phép.');
-            }
-            // $user is the authenticated caller, never model/request action parameters.
-            AuditLog::record($pdo, $user, $auditAction, $targetType, $targetId, $auditMetadata);
-            $pdo->commit();
-        } catch (Throwable $e) {
-            if ($pdo->inTransaction()) $pdo->rollBack();
-            throw $e;
-        }
-        if ($queuedRunId !== null) {
-            // The audit describes acceptance; dispatch cannot precede a successful commit.
-            $res = JudgeEngine::processJudgingRun($pdo, $queuedRunId);
-            $verdict = $res['verdict'] ?? 'SYS_ERR';
-            $score = $res['score'] ?? 0;
-            $answer = $isRetry
-                ? "Đã thử lại run #$rid → run mới #$queuedRunId: **$verdict** ({$score}đ)."
-                : "Đã chấm lại bài nộp #$sid: **$verdict** ($score điểm).";
-        }
-        return ['ok' => true, 'answer' => $answer];
-    }
-
-    private static function findProblem(string $ref): ?array
-    {
-        global $pdo;
-        $ref = trim($ref);
-        if ($ref === '') return null;
-        if (ctype_digit($ref)) {
-            $st = $pdo->prepare('SELECT * FROM problems WHERE id = ? FOR UPDATE');
-            $st->execute([(int)$ref]);
-            return $st->fetch() ?: null;
-        }
-        $st = $pdo->prepare('SELECT * FROM problems WHERE title LIKE ? OR slug = ? LIMIT 1 FOR UPDATE');
-        $st->execute(["%$ref%", $ref]);
-        return $st->fetch() ?: null;
-    }
-
-    // ---------- Hỏi đáp tự do (Nhóm 1) ----------
-
-    public static function answerQA(array $user, string $text): string
-    {
-        // Không gửi danh sách học viên hay mã lớp legacy vào ngữ cảnh AI.
-        $scopeDescription = match ($user['role']) {
-            'admin' => 'quản trị toàn hệ thống',
-            'teacher' => 'chỉ học viên có membership active trong các lớp mình sở hữu và bài nộp của mình',
-            default => 'chỉ dữ liệu cá nhân của mình',
-        };
-        $system = "Bạn là trợ lý của hệ thống chấm bài AlgoJudge (tiếng Việt, xưng hô thầy/cô với giảng viên, bạn với học viên). "
-            . "Người hỏi: {$user['full_name']} (vai trò {$user['role']}; phạm vi: $scopeDescription).\n"
-            . "BẢN ĐỒ TÍNH NĂNG:\n"
-            . "- Luyện tập: Danh sách bài tập (/frontend/index.php), Sân chơi tự do (/frontend/playground.php), Bảng xếp hạng (/frontend/leaderboard.php), Lịch sử nộp bài (/frontend/submissions.php), Hồ sơ & XP (/frontend/profile.php).\n"
-            . "- Giảng dạy: Danh sách bài tập (/frontend/instructor/problems.php), Thêm bài (/frontend/instructor/problem_form.php), Bộ test & phiên bản (/frontend/instructor/dataset_versions.php), Chấm lại (/frontend/instructor/rejudge.php), Hàng đợi chấm (/frontend/instructor/queue.php), Tiến độ học viên (/frontend/instructor/progress.php), Quản lý lớp (/frontend/instructor/classes.php).\n"
-            . "- Quản trị: Danh sách tài khoản (/frontend/admin/users.php), Tạo tài khoản (/frontend/admin/user_form.php).\n"
-            . "QUY TẮC:\n"
-            . "- Chỉ trả lời trong phạm vi các tính năng trên; việc ngoài phạm vi thì nói không làm được. Không suy đoán số liệu hoặc tiết lộ dữ liệu ngoài phạm vi quyền của người hỏi.\n"
-            . "- Tạo tài khoản chỉ dành cho admin, không gán lớp bằng mã tự do. Thêm học viên vào lớp tại Quản lý lớp; xuất báo cáo chọn class_id.\n"
-            . "- TUYỆT ĐỐI không hướng dẫn: xóa dữ liệu, sửa điểm/XP, đổi vai trò, xem mật khẩu, giải hộ bài tập (với học viên chỉ gợi ý hướng, không đưa code).\n"
-            . "- Trả lời ngắn gọn (dưới 150 từ), kèm link trang liên quan khi có. Dùng Markdown đơn giản.";
-        if (!AIHelper::hasKey()) {
-            return self::localQA($user, $text);
-        }
-        try {
-            return AIHelper::chat($system, $text);
-        } catch (Exception $e) {
-            return self::localQA($user, $text);
-        }
-    }
-
-    /** Trả lời cục bộ khi không có AI: gợi ý trang phù hợp theo từ khóa. */
-    private static function localQA(array $user, string $text): string
-    {
-        $t = mb_strtolower($text);
-        $links = [
-            'tiến độ' => 'Tiến độ học viên: /frontend/instructor/progress.php',
-            'chấm lại' => 'Chấm lại: /frontend/instructor/rejudge.php',
-            'hàng đợi' => 'Hàng đợi chấm: /frontend/instructor/queue.php',
-            'tài khoản' => 'Tạo tài khoản: /frontend/admin/user_form.php (chỉ admin)',
-            'thêm bài' => 'Thêm bài tập: /frontend/instructor/problem_form.php',
-            'bảng xếp hạng' => 'Bảng xếp hạng: /frontend/leaderboard.php',
-            'lịch sử' => 'Lịch sử nộp bài: /frontend/submissions.php',
-            'sân chơi' => 'Sân chơi tự do: /frontend/playground.php',
-        ];
-        foreach ($links as $k => $v) {
-            if (str_contains($t, $k)) return "Bạn có thể dùng: $v";
-        }
-        return 'Tôi chưa hiểu ý. Bạn có thể hỏi: "lớp tôi có bao nhiêu học viên?", "hàng đợi chấm còn bao nhiêu?", "chấm lại bài nộp #12", "tạo tài khoản ...", hoặc dán đề bài để tôi tạo bài tập.';
+        return ['answer' => $answer, 'links' => array_map(static fn(array $link): array => ['label' => $link[0], 'url' => $link[1]], $links)];
     }
 }

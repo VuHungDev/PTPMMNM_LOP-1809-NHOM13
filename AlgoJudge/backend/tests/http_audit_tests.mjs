@@ -43,9 +43,12 @@ for(const action of ['toggle_lock','toggle_lock','reset_pwd']){
 await admin.post('/frontend/admin/users.php',{action:'delete_user',target_id:uid});
 check(sql('SELECT COUNT(*) FROM users WHERE id='+uid)==='0' && total()===++n && latest()==='user.delete','deleted account keeps immutable event');
 await admin.post('/frontend/admin/users.php',{action:'delete_user',target_id:uid});check(total()===n,'absent account delete not recorded');
-const body={title:'Audit '+prefix,slug:'audit-'+prefix.replaceAll('_','-'),description:'Disposable audit test',sample_input:'1',sample_output:'1',test_cases:[{stdin:'1',expected:'1',is_public:true}]};
-const created=JSON.parse((await admin.request('/backend/api/ai_create_problem.php',null,body)).text);assert.ok(created.ok);
-const pid=created.problem_id;check(total()===++n && latest()==='problem.create','AI-reviewed problem save emits one event without provider request');
+// The chatbot no longer accepts raw create payloads. Audit this existing manual
+// form without provider access; the dedicated stream suite covers chatbot save.
+const slug='audit-'+prefix.replaceAll('_','-');
+const result=await admin.post('/frontend/instructor/problem_form.php',{action:'create',title:'Audit '+prefix,slug,topic:'Cơ bản',difficulty:'Easy',suggested_lang:'cpp',description:'Disposable audit test',input_desc:'Một số nguyên.',output_desc:'In lại số đã nhập.',sample_input:'1',sample_output:'1',time_limit_ms:'1000','test_stdin[0]':'1','test_expected[0]':'1','test_public[0]':'1','test_boundary[0]':'0'});
+assert.equal(result.status,302);
+const pid=Number(sql("SELECT id FROM problems WHERE slug='"+slug+"'"));check(pid>0 && total()===++n && latest()==='problem.create','manual problem save emits one event without provider request');
 await teacher.post('/frontend/instructor/problems.php',{action:'toggle',problem_id:pid});check(total()===n,'teacher toggle not attributed to admin');
 await admin.post('/frontend/instructor/problems.php',{action:'toggle',problem_id:pid});check(total()===++n && latest()==='problem.enable','admin toggle action matches resulting state');
 await admin.post('/frontend/instructor/dataset_versions.php',{action:'create_version',problem_id:pid,time_limit_ms:1000,changelog:'Test audit',extra_stdin:'2',extra_expected:'2'});

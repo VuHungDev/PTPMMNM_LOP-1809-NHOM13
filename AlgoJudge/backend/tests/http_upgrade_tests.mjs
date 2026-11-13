@@ -51,7 +51,7 @@ for (const [path,type] of [['/frontend/instructor/progress.php','progress'],['/f
   }
 }
 const aiPage = await teacher.request('/frontend/instructor/ai_chat.php');
-check((aiPage.text.match(/id="ai-send"/g) || []).length === 1 && (aiPage.text.match(/id="problem-ai-send"/g) || []).length === 1, 'problem AI form and floating chatbot use distinct controls');
+check((aiPage.text.match(/data-chatbot data-staff=/g) || []).length === 1 && !aiPage.text.includes('data-chatbot-launcher'), 'dedicated chatbot uses one shared component without duplicate floating widget');
 check(!aiPage.text.includes('Đẩy lên luôn'), 'problem AI uses requested add label');
 const studentProfile = await student.request('/frontend/profile.php?page=2');
 check(studentProfile.text.includes('Test problem 11') && !studentProfile.text.includes('>Test problem 1</a>'), 'student per-problem pagination');
@@ -110,18 +110,15 @@ check((await student.request('/backend/api/export_excel.php?type=users')).status
 const usersExport = await admin.request('/backend/api/export_excel.php?type=users&role=student&q=test_extra_1');
 check(tableRows(usersExport).length === 11, 'users export includes full filtered result, not current page');
 check(tableRows(await admin.request('/backend/api/export_excel.php?type=users&q=example.test')).length === 0, 'users export q matches screen, not email');
-// Local AI action routes: no provider request or external API credential is used.
+// All chatbot account mutations are retired, including for administrators.
+// These local refusals must not call a provider or produce confirmation tokens.
 const aiText = 'tạo tài khoản tên Test AI Learner, username test_ai_created, email test_ai_created@example.test';
 const aiDenied = await teacher.request('/backend/api/ai_chat.php', null, {json:{text:aiText},csrf:staffToken});
-check(JSON.parse(aiDenied.text).kind !== 'confirm', 'teacher cannot create an account through chatbot');
+check(aiDenied.headers.get('content-type').includes('text/event-stream') && aiDenied.text.includes('event: answer') && !aiDenied.text.includes('event: draft'), 'teacher gets streamed guidance rather than account mutation');
 const adminToken = token(await admin.request('/frontend/profile.php'));
-const aiConfirm = JSON.parse((await admin.request('/backend/api/ai_chat.php', null, {json:{text:aiText},csrf:adminToken})).text);
-check(aiConfirm.kind === 'confirm' && aiConfirm.summary.includes('ngẫu nhiên'), 'admin account creation requires confirmation and random password');
-const aiCreated = JSON.parse((await admin.request('/backend/api/ai_chat.php', null, {json:{confirm_token:aiConfirm.token},csrf:adminToken})).text);
-const initialPassword = aiCreated.answer?.match(/`([a-f0-9]{24})`/)?.[1];
-check(aiCreated.ok && !!initialPassword, 'AI creates a random initial password');
-await (new Browser()).login('test_ai_created', initialPassword);
-check((await admin.request('/backend/api/ai_chat.php', null, {json:{confirm_token:aiConfirm.token},csrf:adminToken})).status === 400, 'AI confirmation token is single-use');
+const adminRefusal = await admin.request('/backend/api/ai_chat.php', null, {json:{text:aiText},csrf:adminToken});
+check(adminRefusal.text.includes('event: answer') && !adminRefusal.text.includes('confirm_token'), 'admin chatbot account mutations are also retired');
+check((await admin.request('/backend/api/ai_chat.php', null, {json:{confirm_token:'retired-test-token'},csrf:adminToken})).status === 410, 'old confirmation tokens are permanently retired');
 const oldSession = new Browser(); await oldSession.login('test_fresh');
 const changeProfile = await learner.request('/frontend/profile.php');
 const deniedEmail = await learner.request('/frontend/profile.php', {full_name:'HTTP Learner', email:'changed@example.test',current_password:'Test-pass-2026',new_password:'Changed-pass-2026',confirm_password:'Changed-pass-2026',csrf_token:token(changeProfile)});
@@ -135,7 +132,7 @@ const unavailable = await learner.request('/frontend/profile.php', {action:'requ
 check(unavailable.status === 303 && (await learner.request('/frontend/profile.php')).text.includes('chưa sẵn sàng'), 'profile OTP fails closed without SMTP');
 const forgedAdmin = await admin.request('/frontend/profile.php', {action:'request_password',current_password:'Test-pass-2026',csrf_token:adminToken});
 check(forgedAdmin.status === 303 && (await admin.request('/frontend/profile.php')).text.includes('chỉ được xem'), 'admin cannot forge profile credential changes');
-check((await admin.request('/frontend/profile.php')).text.includes('Tạo tài khoản'), 'admin history shows actual local AI account creation');
+check((await admin.request('/frontend/profile.php')).text.includes('Lịch sử hoạt động'), 'admin history remains available after chatbot mutation retirement');
 for (const browser of [teacher,admin]) {
   check(!Object.hasOwn(JSON.parse((await browser.request('/backend/api/session_status.php')).text).user,'xp_points'), 'staff session API hides own XP');
 }

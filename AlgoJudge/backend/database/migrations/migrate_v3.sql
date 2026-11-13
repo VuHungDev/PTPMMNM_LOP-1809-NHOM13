@@ -1,5 +1,5 @@
 -- backend/database/migrate_v3.sql
--- Mở rộng lên 60 bài: mỗi bài gắn 1 ngôn ngữ gợi ý (10 bài / ngôn ngữ × 6 ngôn ngữ).
+-- Thêm 60 bài: mỗi bài gắn 1 ngôn ngữ gợi ý (10 bài / ngôn ngữ × 6 ngôn ngữ).
 -- Ngôn ngữ gợi ý chỉ dùng để lọc + chọn sẵn trong IDE, KHÔNG giới hạn ngôn ngữ nộp bài.
 
 ALTER TABLE problems
