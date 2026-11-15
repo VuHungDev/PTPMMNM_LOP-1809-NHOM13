@@ -446,4 +446,4 @@ Các bộ tích hợp, HTTP và trình duyệt có thể tạo schema, ghi tài 
 - [Thành phần bên thứ ba](THIRD_PARTY.md)
 - [Giấy phép MIT của dự án](LICENSE)
 
-Thành phần bên thứ ba và dịch vụ AI tuân theo giấy phép/điều khoản riêng; giấy phép MIT của dự án không thay thế các điều khoản đó. Khả năng thực thi và thư viện thực tế của bộ chấm phụ thuộc image Docker đã triển khai, không phụ thuộc danh sách gói cài trên máy Windows.
+Dịch vụ AI tuân theo giấy phép/điều khoản riêng; giấy phép MIT của dự án không thay thế các điều khoản đó. Khả năng thực thi và thư viện thực tế của bộ chấm phụ thuộc image Docker đã triển khai, không phụ thuộc danh sách gói cài trên máy Windows.
