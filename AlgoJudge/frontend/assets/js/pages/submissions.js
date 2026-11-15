@@ -14,7 +14,8 @@ async function viewSourceModal(subId) {
         alert(data.error);
         return;
     }
-    document.getElementById('modal-title').innerText = `Bài nộp #${data.submission.id} của ${data.submission.username} (Bộ test v${data.submission.version_number}.0)`;
+    const submitterName = data.submission.username ?? data.submission.full_name ?? 'Chưa cập nhật họ tên';
+    document.getElementById('modal-title').innerText = `Bài nộp #${data.submission.id} của ${submitterName} (Bộ test v${data.submission.version_number}.0)`;
     document.getElementById('modal-code').innerText = data.submission.source_code;
     let html = '<h4>Kết quả từng Test Case (Ẩn toàn bộ dữ liệu chấm kín):</h4><ul style="margin-top:8px; line-height:1.8;">';
     data.active_run_cases.forEach((c) => {

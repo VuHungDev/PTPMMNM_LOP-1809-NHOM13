@@ -29,7 +29,9 @@ if ($user['role'] === 'teacher') {
     $params[] = (int)$fClass;
 }
 if ($fSearch !== '') {
-    $where[] = '(u.username LIKE ? OR u.full_name LIKE ?)';
+    $where[] = $user['role'] === 'teacher'
+        ? '(u.email LIKE ? OR u.full_name LIKE ?)'
+        : '(u.username LIKE ? OR u.full_name LIKE ?)';
     $params[] = "%$fSearch%";
     $params[] = "%$fSearch%";
 }
@@ -44,7 +46,7 @@ $offset = ($page - 1) * $perPage;
 
 $classNamesSql = Auth::classNamesSql($user);
 $stmt = $pdo->prepare("
-    SELECT u.id, u.username, u.full_name,
+    SELECT u.id, u.username, u.full_name, u.email,
            $classNamesSql AS class_names,
            (SELECT COUNT(*) FROM submissions s WHERE s.user_id = u.id) AS sub_total,
            (SELECT COUNT(DISTINCT s.problem_id) FROM submissions s JOIN problems p ON p.id = s.problem_id WHERE s.user_id = u.id AND s.final_verdict = 'AC' AND p.is_active = 1) AS solved,
@@ -103,7 +105,7 @@ require FE_DIR . '/partials/layout_head.php';
                 <option value="<?= (int)$c['id'] ?>" <?= $fClass === (string)$c['id'] ? 'selected' : '' ?>><?= e($c['name']) ?></option>
             <?php endforeach; ?>
         </select>
-        <input type="text" name="q" class="form-control" style="max-width:240px;" placeholder="Tìm username / họ tên..." value="<?= e($fSearch) ?>">
+        <input type="text" name="q" class="form-control" style="max-width:240px;" placeholder="<?= $user['role'] === 'teacher' ? 'Tìm họ tên / email...' : 'Tìm username / họ tên...' ?>" value="<?= e($fSearch) ?>">
         <button type="submit" class="btn btn-primary">Lọc</button>
         <a href="<?= url('/frontend/instructor/progress.php') ?>" class="btn" style="background:#e2e8f0; color:#334155;">Đặt lại</a>
     </form>
@@ -120,7 +122,13 @@ require FE_DIR . '/partials/layout_head.php';
                     $pct = $totalProblems > 0 ? round((int)$r['solved'] / $totalProblems * 100) : 0;
                 ?>
                 <tr style="border-bottom:1px solid var(--cl-border);">
-                    <td style="padding:12px 16px;"><strong><?= e($r['username']) ?></strong><br><small style="color:var(--cl-muted);"><?= e($r['full_name']) ?></small></td>
+                    <td style="padding:12px 16px;">
+                        <?php if ($user['role'] === 'teacher'): ?>
+                            <strong><?= e($r['full_name'] ?: 'Chưa cập nhật họ tên') ?></strong><br><small style="color:var(--cl-muted);"><?= e($r['email']) ?></small>
+                        <?php else: ?>
+                            <strong><?= e($r['username']) ?></strong><br><small style="color:var(--cl-muted);"><?= e($r['full_name']) ?></small>
+                        <?php endif; ?>
+                    </td>
                     <td style="padding:12px 16px;"><span class="badge" style="background:#f1f5f9;"><?= e($r['class_names'] ?? '—') ?></span></td>
                     <td style="padding:12px 16px; font-weight:700;"><?= (int)$r['solved'] ?> / <?= $totalProblems ?></td>
                     <td style="padding:12px 16px; min-width:160px;">

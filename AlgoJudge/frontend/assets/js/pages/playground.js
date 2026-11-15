@@ -1,6 +1,6 @@
 // frontend/assets/js/pages/playground.js — ES module Alpine-agnostic cho Sân chơi tự do.
 // Dùng chung http.js / poll.js / editor.js; không còn JS inline trong playground.php.
-import { apiFetch } from '../modules/http.js';
+import { apiFetch } from '../modules/http.js?v=20261115-run-3';
 import { pollUntilDone } from '../modules/poll.js';
 import { createCodeEditor, setEditorLanguage } from '../modules/editor.js';
 import { ready as alpineReady } from '../modules/alpine-boot.js';
@@ -10,9 +10,12 @@ const SAMPLES = window.PG_SAMPLES || {};
 
 const state = {
     editor: null,
+    editorFailed: false,
+    drafts: {},
     lang: 'python',
     decorations: [],
     running: false,
+    presentationGeneration: 0,
     booted: false,
 };
 
@@ -48,18 +51,23 @@ function switchTab(name, btn) {
 }
 
 function changeLang() {
+    // Reset presentation only; keep the in-flight run locked until it really settles.
+    clearResult();
+    if (state.editor) state.drafts[state.lang] = state.editor.getValue();
     state.lang = el('pg-lang').value;
     try {
         localStorage.setItem('aj.playground.lang', state.lang);
     } catch (e) { /* bỏ qua */ }
     if (state.editor) {
-        state.editor.setValue(SAMPLES[state.lang] || '');
+        state.editor.setValue(state.drafts[state.lang] ?? SAMPLES[state.lang] ?? '');
         setEditorLanguage(state.editor, LANG_META[state.lang]);
         clearErrorMark();
     }
 }
 
 function clearResult() {
+    // Clear affects presentation only; the server-side run can still finish safely.
+    state.presentationGeneration++;
     el('pg-stdout').innerText = 'Bấm "Chạy" để thực thi.';
     el('pg-stderr').innerText = 'Chưa có lỗi.';
     badge('Chờ lệnh', '');
@@ -67,11 +75,33 @@ function clearResult() {
     clearErrorMark();
 }
 
+function showEditorUnavailable() {
+    badge(state.editorFailed ? 'LỖI TẢI BỘ SOẠN THẢO' : 'ĐANG TẢI BỘ SOẠN THẢO', '');
+    el('pg-stdout').innerText = state.editorFailed
+        ? 'Không tải được bộ soạn thảo. Kiểm tra kết nối mạng tới CDN Monaco rồi tải lại trang.'
+        : 'Bộ soạn thảo đang tải, vui lòng chờ rồi bấm Chạy.';
+}
+
 async function run() {
     if (state.running) return;
+    if (!state.editor) {
+        showEditorUnavailable();
+        return;
+    }
+    const presentationGeneration = ++state.presentationGeneration;
+    const submitted = { language: state.lang, source: state.editor.getValue() };
+    const canPresent = () => state.presentationGeneration === presentationGeneration;
     state.running = true;
     const btn = el('pg-run-btn');
     btn.disabled = true;
+    let settled = false;
+    const finish = () => {
+        if (settled) return false;
+        settled = true;
+        state.running = false;
+        btn.disabled = false;
+        return true;
+    };
     badge('ĐANG CHẠY...', '');
     el('pg-stdout').innerText = 'Đang thực thi...';
     el('pg-stderr').innerText = '...';
@@ -82,23 +112,29 @@ async function run() {
     try {
         const { data } = await apiFetch('/run_custom.php', {
             method: 'POST',
-            body: { language: state.lang, source_code: state.editor ? state.editor.getValue() : '', stdin: el('pg-stdin').value },
+            timeoutMs: 90000,
+            body: { language: submitted.language, source_code: submitted.source, stdin: el('pg-stdin').value },
         });
         if (!data.ok) {
-            badge('LỖI', '#7c2d12');
-            el('pg-stdout').innerText = 'Lỗi: ' + (data.error || 'Không tạo được phiên chạy.');
+            if (canPresent()) {
+                badge('LỖI', '#7c2d12');
+                el('pg-stdout').innerText = 'Lỗi: ' + (data.error || 'Không tạo được phiên chạy.');
+            }
             return;
         }
         customRunId = data.custom_run_id;
     } catch (err) {
-        badge('MẤT KẾT NỐI', '#7c2d12');
-        el('pg-stdout').innerText = 'Không gửi được mã nguồn. Kiểm tra mạng rồi thử lại.';
+        if (!canPresent()) return;
+        if (err.name === 'TimeoutError') {
+            badge('HẾT GIỜ CHỜ', '#92400e');
+            el('pg-stdout').innerText = 'Chưa nhận được phản hồi sau 90 giây. Chưa biết kết quả; phiên chạy có thể vẫn đang xử lý trên máy chủ. Mã nguồn và dữ liệu nhập vẫn được giữ nguyên. Không tự động gửi lại.';
+        } else {
+            badge('MẤT KẾT NỐI', '#7c2d12');
+            el('pg-stdout').innerText = 'Không gửi được mã nguồn. Kiểm tra mạng rồi thử lại.';
+        }
         return;
     } finally {
-        if (!customRunId) {
-            state.running = false;
-            btn.disabled = false;
-        }
+        if (!customRunId) finish();
     }
     if (!customRunId) return;
 
@@ -110,23 +146,23 @@ async function run() {
         },
         isDone: (d) => d && d.status === 'DONE',
         onDone: (d) => {
-            state.running = false;
-            btn.disabled = false;
-            render(d);
+            if (!finish() || !canPresent()) return;
+            render(d, submitted);
         },
         onTimeout: (msg) => {
-            state.running = false;
-            btn.disabled = false;
+            if (!finish() || !canPresent()) return;
             badge('HẾT GIỜ CHỜ', '#92400e');
             el('pg-stdout').innerText = msg;
         },
         intervalMs: 500,
-        maxPolls: 40,
-        timeoutText: 'Máy chấm không phản hồi sau 20 giây, hãy thử lại.',
+        maxPolls: 180,
+        timeoutText: 'Chưa nhận được kết quả sau 90 giây. Phiên chạy có thể vẫn đang xử lý.',
     });
 }
 
-function render(d) {
+function render(d, submitted) {
+    const canMarkSource = state.editor && state.lang === submitted.language
+        && state.editor.getValue() === submitted.source;
     el('pg-time').innerText = (d.execution_time_ms || 0) + ' ms';
     const outEl = el('pg-stdout');
     const errEl = el('pg-stderr');
@@ -143,7 +179,7 @@ function render(d) {
         errEl.innerText = '⛔ Dòng ' + (d.error_line || '?') + ': ' + (d.error_message || d.stderr_output || '')
             + (d.error_hint ? '\n💡 Gợi ý: ' + d.error_hint : '')
             + (d.stderr_output ? '\n\n— Chi tiết đầy đủ —\n' + d.stderr_output : '');
-        markErrorLine(d.error_line);
+        if (canMarkSource) markErrorLine(d.error_line);
     } else if (d.verdict === 'RE') {
         badge('✘ LỖI KHI CHẠY (dòng ' + (d.error_line || '?') + ')', '#7c2d12');
         outEl.innerText = d.stdout_output ? 'Đã in được trước khi lỗi:\n' + d.stdout_output : '(chưa in gì trước khi lỗi)';
@@ -151,7 +187,7 @@ function render(d) {
         errEl.innerText = '⛔ Dòng ' + (d.error_line || '?') + ': ' + (d.error_message || d.stderr_output || '')
             + (d.error_hint ? '\n💡 Gợi ý: ' + d.error_hint : '')
             + (d.stderr_output ? '\n\n— Chi tiết đầy đủ —\n' + d.stderr_output : '');
-        markErrorLine(d.error_line);
+        if (canMarkSource) markErrorLine(d.error_line);
     } else if (d.verdict === 'TLE') {
         badge('⏱ QUÁ THỜI GIAN (10s)', '#92400e');
         outEl.innerText = d.stdout_output || '(chưa in gì)';
@@ -180,10 +216,18 @@ function playgroundComponent() {
             } catch (e) { /* bỏ qua */ }
             if (!SAMPLES[state.lang]) state.lang = 'python';
             el('pg-lang').value = state.lang;
-            createCodeEditor('pg-editor', { value: SAMPLES[state.lang], language: LANG_META[state.lang] || 'python' })
-                .then((ed) => { state.editor = ed; })
+            const initialLang = state.lang;
+            createCodeEditor('pg-editor', { value: SAMPLES[initialLang], language: LANG_META[initialLang] || 'python' })
+                .then((ed) => {
+                    state.editor = ed;
+                    if (state.lang !== initialLang) {
+                        setEditorLanguage(ed, LANG_META[state.lang]);
+                        ed.setValue(state.drafts[state.lang] ?? SAMPLES[state.lang] ?? '');
+                    }
+                })
                 .catch(() => {
-                    el('pg-stdout').innerText = 'Không tải được bộ soạn thảo (cần mạng để tải Monaco từ CDN).';
+                    state.editorFailed = true;
+                    showEditorUnavailable();
                 });
             document.addEventListener('keydown', (ev) => {
                 if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {

@@ -5,7 +5,7 @@ if (php_sapi_name() !== 'cli') {
     die('Chỉ được chạy Judge Worker Daemon từ dòng lệnh (CLI) để tách biệt khỏi tiến trình Web!');
 }
 
-require_once __DIR__ . '/../lib/JudgeEngine.php';
+require_once __DIR__ . '/../lib/JudgeQueue.php';
 
 echo "=====================================================\n";
 echo " [AlgoJudge] Judge Worker Daemon (CLI) — 6 ngôn ngữ\n";
@@ -29,19 +29,7 @@ while (true) {
     $stmtCustom = $pdo->query("SELECT * FROM custom_runs WHERE status = 'QUEUED' ORDER BY id ASC LIMIT 1");
     $custom = $stmtCustom->fetch();
     if ($custom) {
-        $pdo->prepare("UPDATE custom_runs SET status = 'RUNNING' WHERE id = ?")->execute([$custom['id']]);
-        $workDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'cl_custom_' . $custom['id'];
-        @mkdir($workDir, 0700, true);
-
-        $comp = JudgeEngine::compileOrCheckSyntax($custom['language'], $custom['source_code'], $workDir);
-        if (!$comp['ok']) {
-            $pdo->prepare("UPDATE custom_runs SET status = 'DONE', verdict = ?, stderr_output = ? WHERE id = ?")
-                ->execute([$comp['type'], $comp['message'], $custom['id']]);
-        } else {
-            $exec = JudgeEngine::runSingleTestCase($comp['exec_cmd'], $custom['custom_stdin'], 2000);
-            $pdo->prepare("UPDATE custom_runs SET status = 'DONE', verdict = ?, stdout_output = ?, stderr_output = ?, execution_time_ms = ? WHERE id = ?")
-                ->execute([$exec['verdict'], mb_substr($exec['stdout'], 0, 2000), mb_substr($exec['stderr'], 0, 2000), $exec['time_ms'], $custom['id']]);
-        }
+        JudgeQueue::processCustomRun($pdo, (int)$custom['id']);
         echo '[CUSTOM RUN #' . $custom['id'] . "] Hoàn tất.\n";
     }
 

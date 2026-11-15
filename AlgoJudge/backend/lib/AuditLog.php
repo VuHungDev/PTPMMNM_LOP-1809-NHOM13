@@ -4,6 +4,7 @@ final class AuditLog
 {
     private const EVENTS = [
         'user.create' => ['user', 'Tạo tài khoản'],
+        'user.update' => ['user', 'Sửa thông tin tài khoản'],
         'user.role_change' => ['user', 'Đổi vai trò tài khoản'],
         'user.password_reset' => ['user', 'Đặt lại mật khẩu tài khoản'],
         'user.lock' => ['user', 'Khóa tài khoản'],
@@ -11,6 +12,7 @@ final class AuditLog
         'user.delete' => ['user', 'Xóa tài khoản'],
         'class.create' => ['class', 'Tạo lớp học'],
         'class.assign_owner' => ['class', 'Gán giáo viên chủ quản'],
+        'class.revoke_owner' => ['class', 'Thu hồi giáo viên chủ quản'],
         'class.activate_code' => ['class', 'Kích hoạt mã mời'],
         'class.rotate_code' => ['class', 'Đổi mã mời'],
         'class.add_student' => ['class', 'Thêm học viên vào lớp'],

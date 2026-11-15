@@ -1,0 +1,120 @@
+{
+  "language": "python",
+  "programs": [
+    {
+      "slug": "sum-two-integers",
+      "title": "Bài 1: Tính tổng hai số nguyên A và B",
+      "correct": "python/sum-two-integers/AC/solution.py",
+      "wrong": "python/sum-two-integers/WA/solution.py",
+      "counterexample": {
+        "stdin": "-10 25\n",
+        "expected_stdout": "15\n",
+        "explanation": "Mã sai cộng trị tuyệt đối nên in 35 thay vì -10 + 25 = 15."
+      }
+    },
+    {
+      "slug": "check-leap-year",
+      "title": "Bài 2: Kiểm tra năm nhuận",
+      "correct": "python/check-leap-year/AC/solution.py",
+      "wrong": "python/check-leap-year/WA/solution.py",
+      "counterexample": {
+        "stdin": "1900\n",
+        "expected_stdout": "NO\n",
+        "explanation": "1900 chia hết cho 100 nhưng không chia hết cho 400 nên không nhuận; mã sai chỉ xét chia hết cho 4 và in YES."
+      }
+    },
+    {
+      "slug": "factorial-n",
+      "title": "Bài 3: Tính giai thừa N!",
+      "correct": "python/factorial-n/AC/solution.py",
+      "wrong": "python/factorial-n/WA/solution.py",
+      "counterexample": {
+        "stdin": "5\n",
+        "expected_stdout": "120\n",
+        "explanation": "range(2, n) bỏ mất thừa số 5 nên mã sai in 24 thay vì 5! = 120."
+      }
+    },
+    {
+      "slug": "gcd-two-numbers",
+      "title": "Bài 4: Ước chung lớn nhất (GCD)",
+      "correct": "python/gcd-two-numbers/AC/solution.py",
+      "wrong": "python/gcd-two-numbers/WA/solution.py",
+      "counterexample": {
+        "stdin": "7 13\n",
+        "expected_stdout": "1\n",
+        "explanation": "Euclid đi qua (7,13), (13,7), (7,6), (6,1); mã sai dừng khi b bằng 1 và in a = 6 thay vì GCD = 1."
+      }
+    },
+    {
+      "slug": "prime-check",
+      "title": "Bài 5: Kiểm tra số nguyên tố",
+      "correct": "python/prime-check/AC/solution.py",
+      "wrong": "python/prime-check/WA/solution.py",
+      "counterexample": {
+        "stdin": "49\n",
+        "expected_stdout": "FALSE\n",
+        "explanation": "49 = 7 * 7 là hợp số; điều kiện divisor * divisor < n bỏ qua ước 7 nên mã sai in TRUE."
+      }
+    },
+    {
+      "slug": "fibonacci-nth",
+      "title": "Bài 6: Số Fibonacci thứ N",
+      "correct": "python/fibonacci-nth/AC/solution.py",
+      "wrong": "python/fibonacci-nth/WA/solution.py",
+      "counterexample": {
+        "stdin": "6\n",
+        "expected_stdout": "8\n",
+        "explanation": "Sau 6 bước current là F_6 = 8 nhưng mã sai in following là F_7 = 13."
+      }
+    },
+    {
+      "slug": "array-max-element",
+      "title": "Bài 7: Tìm phần tử lớn nhất trong mảng",
+      "correct": "python/array-max-element/AC/solution.py",
+      "wrong": "python/array-max-element/WA/solution.py",
+      "counterexample": {
+        "stdin": "4\n-5 -2 -10 -1\n",
+        "expected_stdout": "-1\n",
+        "explanation": "Mảng toàn số âm có max = -1; mã sai khởi tạo largest = 0 nên in 0, không phải phần tử trong mảng."
+      }
+    },
+    {
+      "slug": "palindrome-string",
+      "title": "Bài 8: Chuỗi đối xứng (Palindrome)",
+      "correct": "python/palindrome-string/AC/solution.py",
+      "wrong": "python/palindrome-string/WA/solution.py",
+      "counterexample": {
+        "stdin": "Aa\n",
+        "expected_stdout": "NO\n",
+        "explanation": "Chuỗi Aa khác chuỗi đảo aA; mã sai chuyển thành aa và in YES, làm mất phân biệt hoa thường."
+      }
+    },
+    {
+      "slug": "count-vowels",
+      "title": "Bài 9: Đếm số lượng nguyên âm",
+      "correct": "python/count-vowels/AC/solution.py",
+      "wrong": "python/count-vowels/WA/solution.py",
+      "counterexample": {
+        "stdin": "AEIOUaeiou\n",
+        "expected_stdout": "10\n",
+        "explanation": "Cả 10 ký tự đều là nguyên âm theo đề; mã sai chỉ đếm 5 chữ thường và bỏ qua AEIOU."
+      }
+    },
+    {
+      "slug": "binary-search-index",
+      "title": "Bài 10: Tìm kiếm nhị phân trên mảng tăng dần",
+      "correct": "python/binary-search-index/AC/solution.py",
+      "wrong": "python/binary-search-index/WA/solution.py",
+      "counterexample": {
+        "stdin": "6 6\n1 2 3 4 5 6\n",
+        "expected_stdout": "5\n",
+        "explanation": "Giá trị 6 ở chỉ số 5; mã sai dùng left < right nên thoát khi hai cận cùng bằng 5, không kiểm tra phần tử này và in -1."
+      }
+    }
+  ],
+  "diagnostics": {
+    "CE": "python/_diagnostics/CE/solution.py",
+    "RE": "python/_diagnostics/RE/solution.py",
+    "TLE": "python/_diagnostics/TLE/solution.py"
+  }
+}

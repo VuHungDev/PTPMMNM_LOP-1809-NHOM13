@@ -7,7 +7,8 @@ $fProblem = (int)($_GET['problem_id'] ?? 0);
 $fVerdict = $_GET['verdict'] ?? '';
 $fClass = filter_var($_GET['class_id'] ?? '', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
 $fClass = $fClass === false ? '' : (string)$fClass;
-$fUser = trim($_GET['username'] ?? '');
+$studentSearchKey = $viewer['role'] === 'teacher' ? 'q' : 'username';
+$fUser = trim($_GET[$studentSearchKey] ?? $_GET['username'] ?? '');
 $page = max(1, (int)($_GET['page'] ?? 1));
 $perPage = 15;
 
@@ -45,8 +46,13 @@ if ($fVerdict !== '') {
     $params[] = $fVerdict;
 }
 if ($fUser !== '') {
-    $where[] = 'u.username LIKE ?';
-    $params[] = '%' . $fUser . '%';
+    if ($viewer['role'] === 'teacher') {
+        $where[] = '(u.full_name LIKE ? OR u.email LIKE ?)';
+        array_push($params, '%' . $fUser . '%', '%' . $fUser . '%');
+    } else {
+        $where[] = 'u.username LIKE ?';
+        $params[] = '%' . $fUser . '%';
+    }
 }
 $whereSql = $where ? 'WHERE ' . implode(' AND ', $where) : '';
 
@@ -88,7 +94,7 @@ $baseQuery = array_filter([
     'problem_id' => $fProblem ?: null,
     'verdict' => $fVerdict,
     'class_id' => $fClass,
-    'username' => $fUser,
+    $studentSearchKey => $fUser,
 ], static fn($value) => $value !== null && $value !== '');
 $exportQuery = http_build_query(['type' => 'submissions'] + $baseQuery);
 
@@ -133,7 +139,7 @@ require FE_DIR . '/partials/layout_head.php';
             <?php endforeach; ?>
         </select>
         <?php endif; ?>
-        <input type="text" name="username" class="form-control" style="max-width:180px;" placeholder="Tìm username..." value="<?= e($fUser) ?>">
+        <input type="text" name="<?= $studentSearchKey ?>" class="form-control" style="max-width:240px;" placeholder="<?= $viewer['role'] === 'teacher' ? 'Tìm họ tên / email...' : 'Tìm username...' ?>" value="<?= e($fUser) ?>">
         <button type="submit" class="btn btn-primary">Lọc</button>
         <a href="<?= url('/frontend/submissions.php') ?>" class="btn" style="background:#e2e8f0; color:#334155;">Đặt lại</a>
     </form>
@@ -158,7 +164,7 @@ require FE_DIR . '/partials/layout_head.php';
                 ?>
                 <tr style="border-bottom:1px solid var(--cl-border);">
                     <td style="padding:12px 16px; font-weight:700;">#<?= (int)$row['id'] ?></td>
-                    <td style="padding:12px 16px;"><?= e($row['full_name']) ?> (<code><?= e($row['username']) ?></code>)</td>
+                    <td style="padding:12px 16px;"><?= e($row['full_name'] ?: 'Chưa cập nhật họ tên') ?><?php if ($viewer['role'] !== 'teacher'): ?> (<code><?= e($row['username']) ?></code>)<?php endif; ?></td>
                     <td style="padding:12px 16px;"><span class="badge" style="background:#f1f5f9;"><?= e($row['class_names'] ?? '—') ?></span></td>
                     <td style="padding:12px 16px; font-weight:600;"><?= e($row['problem_title']) ?></td>
                     <td style="padding:12px 16px;"><code><?= e($row['language']) ?></code> • v<?= (int)$row['version_number'] ?>.0</td>
@@ -166,7 +172,7 @@ require FE_DIR . '/partials/layout_head.php';
                     <td style="padding:12px 16px;"><?= (int)$row['pass_count'] ?> / <?= (int)$row['total_cases'] ?></td>
                     <td style="padding:12px 16px; text-align:right;">
                         <?php if ($allowed): ?>
-                            <button class="btn btn-primary" style="padding:5px 12px; font-size:0.8rem;" data-aj-cmp="submissionsPage" x-on:click="viewSourceModal(<?= (int)$row['id'] ?>)">Xem Mã &amp; Lịch sử Run</button>
+                            <button class="aj-icon-action aj-icon-action--view" aria-label="Xem Mã &amp; Lịch sử Run" data-action-label="Xem Mã &amp; Lịch sử Run" title="Xem Mã &amp; Lịch sử Run" data-aj-cmp="submissionsPage" x-on:click="viewSourceModal(<?= (int)$row['id'] ?>)"><?= aj_action_icon('view') ?></button>
                         <?php else: ?>
                             <span style="color:#94a3b8; font-size:0.82rem;">🔒 Mã riêng tư (Đã khóa)</span>
                         <?php endif; ?>

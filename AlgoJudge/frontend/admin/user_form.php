@@ -43,13 +43,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($pdo->inTransaction()) throw new LogicException('Account creation requires its own transaction.');
             $pdo->beginTransaction();
             $ownsTransaction = true;
-            $stmt = $pdo->prepare('SELECT role, is_active, auth_version FROM users WHERE id = ? FOR UPDATE');
+            $stmt = $pdo->prepare('SELECT id, role, is_active, auth_version FROM users WHERE id = ? FOR UPDATE');
             $stmt->execute([(int)$user['id']]);
             $actor = $stmt->fetch();
             if (!$actor || $actor['role'] !== 'admin' || (int)$actor['is_active'] !== 1
                 || (isset($user['auth_version']) && (int)$user['auth_version'] !== (int)$actor['auth_version'])) {
                 throw new DomainException('Quyền tài khoản đã thay đổi. Hãy đăng nhập lại.');
             }
+            AdminPolicy::assertCanAssignRole($actor, $tRole);
             $stmt = $pdo->prepare('SELECT id FROM users WHERE username = ? OR email = ? LIMIT 1');
             $stmt->execute([$tUser, $tEmail]);
             if ($stmt->fetchColumn()) throw new DomainException('Username hoặc email đã tồn tại.');
@@ -86,7 +87,7 @@ require FE_DIR . '/partials/layout_head.php';
             <div class="form-group"><label for="new-username">Username (chữ/số/_)</label><input id="new-username" type="text" name="t_username" class="form-control" required minlength="3" maxlength="50" pattern="[a-zA-Z0-9_]{3,50}" autocomplete="off" value="<?= e($tUser) ?>"></div>
             <div class="form-group"><label for="new-email">Email</label><input id="new-email" type="email" name="t_email" class="form-control" required maxlength="100" value="<?= e($tEmail) ?>"></div>
             <div class="form-group"><label for="new-role">Vai trò</label><select id="new-role" name="t_role" class="form-control" required>
-                <?php foreach (['teacher' => 'teacher (giảng viên)', 'student' => 'student (học viên)', 'admin' => 'admin (quản trị)'] as $v => $label): ?><option value="<?= $v ?>" <?= $tRole === $v ? 'selected' : '' ?>><?= e($label) ?></option><?php endforeach; ?>
+                <?php foreach (['teacher' => 'teacher (giảng viên)', 'student' => 'student (học viên)'] + (AdminPolicy::isPrimary($user) ? ['admin' => 'admin (quản trị phụ)'] : []) as $v => $label): ?><option value="<?= $v ?>" <?= $tRole === $v ? 'selected' : '' ?>><?= e($label) ?></option><?php endforeach; ?>
             </select></div>
             <div class="form-group"><label for="new-password">Mật khẩu (8–72 byte)</label><input id="new-password" type="password" name="t_password" class="form-control" required minlength="8" maxlength="72" autocomplete="new-password"></div>
             <div class="form-group"><label for="confirm-password">Nhập lại mật khẩu</label><input id="confirm-password" type="password" name="t_password_confirm" class="form-control" required minlength="8" maxlength="72" autocomplete="new-password"></div>

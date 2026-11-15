@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/../lib/Auth.php';
+require_once __DIR__ . '/../lib/LeaderboardScope.php';
 
 $viewer = Auth::user();
 if (!$viewer) {
@@ -7,17 +8,27 @@ if (!$viewer) {
     header('Content-Type: text/plain; charset=utf-8');
     die('Hết phiên đăng nhập. Vui lòng đăng nhập lại rồi xuất Excel.');
 }
-$type = (string)($_GET['type'] ?? 'submissions');
-$fProblem = max(0, (int)($_GET['problem_id'] ?? 0));
-$fVerdict = (string)($_GET['verdict'] ?? '');
+$isTeacher = $viewer['role'] === 'teacher';
+$typeValue = $_GET['type'] ?? 'submissions';
+$type = is_string($typeValue) ? $typeValue : '';
 $fClass = filter_var($_GET['class_id'] ?? '', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) ?: 0;
-$fUser = trim((string)($_GET['username'] ?? ''));
-$fSearch = trim((string)($_GET['q'] ?? ''));
+// Aggregate leaderboards ignore detailed-report filters, including malformed arrays.
+if ($type === 'leaderboard') {
+    $fProblem = 0;
+    $fVerdict = $fUser = $fSearch = '';
+} else {
+    $fProblem = max(0, (int)($_GET['problem_id'] ?? 0));
+    $fVerdict = (string)($_GET['verdict'] ?? '');
+    $fUser = trim((string)($_GET[$isTeacher ? 'q' : 'username'] ?? $_GET['username'] ?? ''));
+    $fSearch = trim((string)($_GET['q'] ?? ''));
+}
 $allowedVerdicts = ['QUEUED', 'RUNNING', 'AC', 'WA', 'TLE', 'RE', 'CE', 'SYS_ERR'];
 if (!in_array($fVerdict, $allowedVerdicts, true)) $fVerdict = '';
 $date = date('Ymd_Hi');
 $classNamesSql = Auth::classNamesSql($viewer);
-if ($viewer['role'] === 'teacher' && $fClass > 0 && !Auth::teacherOwnsClass((int)$viewer['id'], $fClass)) {
+$teacherSystemLeaderboard = $type === 'leaderboard' && $isTeacher
+    && LeaderboardScope::normalizeScope($viewer, $_GET['scope'] ?? null) === 'system';
+if ($isTeacher && !$teacherSystemLeaderboard && $fClass > 0 && !Auth::teacherOwnsClass((int)$viewer['id'], $fClass)) {
     http_response_code(403);
     die('Bạn không quản lý lớp này.');
 }
@@ -76,14 +87,14 @@ if ($type === 'progress') {
     }
     $params = [];
     $scope = exportTeacherClassPredicate($viewer, $fClass, $params);
-    $sql = "SELECT u.username, u.full_name,
+    $sql = "SELECT u.username, u.full_name, u.email,
                    $classNamesSql AS class_names,
                    (SELECT COUNT(*) FROM submissions s WHERE s.user_id = u.id) AS sub_total,
                    (SELECT COUNT(DISTINCT s.problem_id) FROM submissions s JOIN problems p ON p.id = s.problem_id WHERE s.user_id = u.id AND s.final_verdict = 'AC' AND p.is_active = 1) AS solved,
                    (SELECT MAX(s.created_at) FROM submissions s WHERE s.user_id = u.id) AS last_submit
             FROM users u WHERE u.role = 'student' AND $scope";
     if ($fSearch !== '') {
-        $sql .= ' AND (u.username LIKE ? OR u.full_name LIKE ?)';
+        $sql .= $isTeacher ? ' AND (u.email LIKE ? OR u.full_name LIKE ?)' : ' AND (u.username LIKE ? OR u.full_name LIKE ?)';
         $params[] = '%' . $fSearch . '%';
         $params[] = '%' . $fSearch . '%';
     }
@@ -92,10 +103,12 @@ if ($type === 'progress') {
     $stmt->execute($params);
     $rows = $stmt->fetchAll();
     $totalProblems = (int)$pdo->query('SELECT COUNT(*) FROM problems WHERE is_active = 1')->fetchColumn();
-    xlsStart("algojudge_tiendo_$date.xls", ['Username', 'Họ tên', 'Lớp', 'Bài đã giải (AC)', 'Tổng bài', 'Tổng lượt nộp', 'Tỉ lệ AC', 'Lần nộp cuối']);
+    $identityHeaders = $isTeacher ? ['Họ tên', 'Email'] : ['Username', 'Họ tên'];
+    xlsStart("algojudge_tiendo_$date.xls", array_merge($identityHeaders, ['Lớp', 'Bài đã giải (AC)', 'Tổng bài', 'Tổng lượt nộp', 'Tỉ lệ AC', 'Lần nộp cuối']));
     foreach ($rows as $r) {
         $rate = $totalProblems > 0 ? round((int)$r['solved'] / $totalProblems * 100, 1) . '%' : '0%';
-        xlsRow([$r['username'], $r['full_name'], $r['class_names'] ?: '—', $r['solved'], $totalProblems, $r['sub_total'], $rate, $r['last_submit'] ?? '']);
+        $identity = $isTeacher ? [$r['full_name'], $r['email']] : [$r['username'], $r['full_name']];
+        xlsRow(array_merge($identity, [$r['class_names'] ?: '—', $r['solved'], $totalProblems, $r['sub_total'], $rate, $r['last_submit'] ?? '']));
     }
     xlsEnd();
 }
@@ -114,7 +127,15 @@ if ($type === 'submissions') {
     }
     if ($fProblem > 0) { $where[] = 's.problem_id = ?'; $params[] = $fProblem; }
     if ($fVerdict !== '') { $where[] = 's.final_verdict = ?'; $params[] = $fVerdict; }
-    if ($fUser !== '') { $where[] = 'u.username LIKE ?'; $params[] = '%' . $fUser . '%'; }
+    if ($fUser !== '') {
+        if ($isTeacher) {
+            $where[] = '(u.full_name LIKE ? OR u.email LIKE ?)';
+            array_push($params, '%' . $fUser . '%', '%' . $fUser . '%');
+        } else {
+            $where[] = 'u.username LIKE ?';
+            $params[] = '%' . $fUser . '%';
+        }
+    }
     $sql = "SELECT s.id, u.username, u.full_name,
                    $classNamesSql AS class_names,
                    p.title AS problem_title, s.language, pv.version_number, s.final_verdict, s.final_score, s.pass_count, s.total_cases, s.created_at
@@ -123,8 +144,10 @@ if ($type === 'submissions') {
     $sql .= ' ORDER BY s.id DESC';
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
-    xlsStart("algojudge_bainop_$date.xls", ['ID', 'Username', 'Họ tên', 'Lớp', 'Bài tập', 'Ngôn ngữ', 'Phiên bản', 'Kết quả', 'Điểm', 'Số ca đúng', 'Tổng ca', 'Ngày nộp']);
-    foreach ($stmt->fetchAll() as $r) xlsRow([$r['id'], $r['username'], $r['full_name'], $r['class_names'] ?: '—', $r['problem_title'], $r['language'], 'v' . $r['version_number'] . '.0', $r['final_verdict'], $r['final_score'], $r['pass_count'], $r['total_cases'], $r['created_at']]);
+    xlsStart("algojudge_bainop_$date.xls", array_merge(['ID'], $isTeacher ? [] : ['Username'], ['Họ tên', 'Lớp', 'Bài tập', 'Ngôn ngữ', 'Phiên bản', 'Kết quả', 'Điểm', 'Số ca đúng', 'Tổng ca', 'Ngày nộp']));
+    foreach ($stmt->fetchAll() as $r) {
+        xlsRow(array_merge([$r['id']], $isTeacher ? [] : [$r['username']], [$r['full_name'], $r['class_names'] ?: '—', $r['problem_title'], $r['language'], 'v' . $r['version_number'] . '.0', $r['final_verdict'], $r['final_score'], $r['pass_count'], $r['total_cases'], $r['created_at']]));
+    }
     xlsEnd();
 }
 
@@ -147,26 +170,48 @@ if ($type === 'users') {
 if ($type === 'roster') {
     if (!in_array($viewer['role'], ['teacher', 'admin'], true)) { http_response_code(403); die('Chỉ giảng viên và quản trị viên được xuất danh sách lớp.'); }
     if ($fClass < 1 || ($viewer['role'] === 'teacher' && !Auth::teacherOwnsClass((int)$viewer['id'], $fClass))) { http_response_code(403); die('Lớp không hợp lệ hoặc bạn không quản lý lớp này.'); }
-    $stmt = $pdo->prepare("SELECT c.name AS class_name, u.username, u.full_name, u.email, cm.status, cm.requested_at FROM class_members cm JOIN classes c ON c.id = cm.class_id JOIN users u ON u.id = cm.user_id WHERE cm.class_id = ? ORDER BY FIELD(cm.status, 'pending', 'active', 'rejected', 'removed'), u.username");
-    $stmt->execute([$fClass]);
-    xlsStart("algojudge_lop_$date.xls", ['Lớp', 'Username', 'Họ tên', 'Email', 'Trạng thái', 'Ngày yêu cầu']);
-    foreach ($stmt->fetchAll() as $r) xlsRow([$r['class_name'], $r['username'], $r['full_name'], $r['email'], $r['status'], $r['requested_at']]);
+    // Recheck ownership in the data read, not only in the earlier request gate.
+    $rosterParams = [$fClass];
+    $ownerPredicate = '';
+    if ($isTeacher) {
+        $ownerPredicate = ' AND c.owner_teacher_id = ?';
+        $rosterParams[] = (int)$viewer['id'];
+    }
+    $stmt = $pdo->prepare("SELECT c.name AS class_name, u.username, u.full_name, u.email, cm.status, cm.requested_at FROM class_members cm JOIN classes c ON c.id = cm.class_id JOIN users u ON u.id = cm.user_id WHERE cm.class_id = ?$ownerPredicate ORDER BY FIELD(cm.status, 'pending', 'active', 'rejected', 'removed'), u.username");
+    $stmt->execute($rosterParams);
+    $rows = $stmt->fetchAll();
+    // A revoke while rows are being fetched must not emit already-read class metadata.
+    if ($isTeacher && !Auth::teacherOwnsClass((int)$viewer['id'], $fClass)) { http_response_code(403); die('Bạn không quản lý lớp này.'); }
+    xlsStart("algojudge_lop_$date.xls", array_merge(['Lớp'], $isTeacher ? [] : ['Username'], ['Họ tên', 'Email', 'Trạng thái', 'Ngày yêu cầu']));
+    foreach ($rows as $r) {
+        xlsRow(array_merge([$r['class_name']], $isTeacher ? [] : [$r['username']], [$r['full_name'], $r['email'], $r['status'], $r['requested_at']]));
+    }
     xlsEnd();
 }
 
 if ($type === 'leaderboard') {
     if (!in_array($viewer['role'], ['teacher', 'admin'], true)) { http_response_code(403); die('Chỉ giảng viên và quản trị viên được xuất bảng xếp hạng.'); }
-    $params = [];
-    $scope = exportTeacherClassPredicate($viewer, $fClass, $params);
-    $stmt = $pdo->prepare("SELECT u.username, u.full_name, u.xp_points,
+    try {
+        $leaderboard = LeaderboardScope::resolve($pdo, $viewer, $_GET);
+    } catch (DomainException $e) {
+        http_response_code($e->getCode());
+        die($e->getMessage());
+    }
+    $classNamesSql = $leaderboard['class_names_sql'];
+    $whereSql = $leaderboard['where_sql'];
+    $identitySql = $isTeacher ? 'u.full_name' : 'u.username, u.full_name';
+    $stmt = $pdo->prepare("SELECT $identitySql, u.xp_points,
            $classNamesSql AS class_names,
            (SELECT COUNT(DISTINCT s.problem_id) FROM submissions s WHERE s.user_id = u.id AND s.final_verdict = 'AC') AS solved,
            (SELECT COUNT(*) FROM submissions s WHERE s.user_id = u.id) AS sub_total
-           FROM users u WHERE u.role = 'student' AND $scope ORDER BY u.xp_points DESC, solved DESC, u.id ASC");
-    $stmt->execute($params);
-    xlsStart("algojudge_xep_hang_$date.xls", ['Hạng', 'Username', 'Họ tên', 'Lớp', 'XP', 'Bài đã giải', 'Lượt nộp']);
+           FROM users u $whereSql ORDER BY u.xp_points DESC, solved DESC, u.id ASC");
+    $stmt->execute($leaderboard['params']);
+    xlsStart("algojudge_xep_hang_$date.xls", array_merge(['Hạng'], $isTeacher ? [] : ['Username'], ['Họ tên', 'Lớp', 'XP', 'Bài đã giải', 'Lượt nộp']));
     $rank = 0;
-    foreach ($stmt->fetchAll() as $r) xlsRow([++$rank, $r['username'], $r['full_name'], $r['class_names'] ?: '—', $r['xp_points'], $r['solved'], $r['sub_total']]);
+    foreach ($stmt->fetchAll() as $r) {
+        $fullName = $isTeacher ? ($r['full_name'] ?: 'Chưa cập nhật họ tên') : $r['full_name'];
+        xlsRow(array_merge([++$rank], $isTeacher ? [] : [$r['username']], [$fullName, $r['class_names'] ?: '—', $r['xp_points'], $r['solved'], $r['sub_total']]));
+    }
     xlsEnd();
 }
 

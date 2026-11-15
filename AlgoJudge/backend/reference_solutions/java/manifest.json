@@ -1,0 +1,120 @@
+{
+  "language": "java",
+  "programs": [
+    {
+      "slug": "java-hello-name",
+      "title": "Java01: Chào theo tên",
+      "correct": "java/java-hello-name/AC/Main.java",
+      "wrong": "java/java-hello-name/WA/Main.java",
+      "counterexample": {
+        "stdin": "An\n",
+        "expected_stdout": "Hello, An!\n",
+        "explanation": "Bản WA quên dấu phẩy của mẫu lời chào, in Hello An! thay vì Hello, An!."
+      }
+    },
+    {
+      "slug": "java-max-three",
+      "title": "Java02: Lớn nhất 3 số",
+      "correct": "java/java-max-three/AC/Main.java",
+      "wrong": "java/java-max-three/WA/Main.java",
+      "counterexample": {
+        "stdin": "-1 -2 -3\n",
+        "expected_stdout": "-1\n",
+        "explanation": "Bản WA khởi tạo giá trị lớn nhất bằng 0 nên in 0 khi cả ba số đều âm; giá trị lớn nhất thực tế là -1."
+      }
+    },
+    {
+      "slug": "java-even-sum",
+      "title": "Java03: Tổng số chẵn 1..N",
+      "correct": "java/java-even-sum/AC/Main.java",
+      "wrong": "java/java-even-sum/WA/Main.java",
+      "counterexample": {
+        "stdin": "10\n",
+        "expected_stdout": "30\n",
+        "explanation": "Bản WA chỉ cộng các số chẵn nhỏ hơn N, bỏ mất 10 nên in 20 thay vì tổng 2+4+6+8+10=30."
+      }
+    },
+    {
+      "slug": "java-vowel-count",
+      "title": "Java04: Đếm nguyên âm",
+      "correct": "java/java-vowel-count/AC/Main.java",
+      "wrong": "java/java-vowel-count/WA/Main.java",
+      "counterexample": {
+        "stdin": "AEIOU\n",
+        "expected_stdout": "5\n",
+        "explanation": "Bản WA chỉ nhận nguyên âm viết thường, in 0 cho AEIOU dù đề yêu cầu không phân biệt hoa thường và có đủ 5 nguyên âm."
+      }
+    },
+    {
+      "slug": "java-array-sum",
+      "title": "Java05: Tổng mảng",
+      "correct": "java/java-array-sum/AC/Main.java",
+      "wrong": "java/java-array-sum/WA/Main.java",
+      "counterexample": {
+        "stdin": "4\n1 2 3 4\n",
+        "expected_stdout": "10\n",
+        "explanation": "Bản WA bỏ phần tử đầu mảng khi cộng dồn, chỉ cộng 2+3+4 và in 9 thay vì 10."
+      }
+    },
+    {
+      "slug": "java-fizzbuzz",
+      "title": "Java06: FizzBuzz",
+      "correct": "java/java-fizzbuzz/AC/Main.java",
+      "wrong": "java/java-fizzbuzz/WA/Main.java",
+      "counterexample": {
+        "stdin": "15\n",
+        "expected_stdout": "1\n2\nFizz\n4\nBuzz\nFizz\n7\n8\nFizz\nBuzz\n11\nFizz\n13\n14\nFizzBuzz\n",
+        "explanation": "Bản WA kiểm tra chia hết cho 3 trước trường hợp chia hết cho cả 3 và 5, khiến dòng thứ 15 là Fizz thay vì FizzBuzz."
+      }
+    },
+    {
+      "slug": "java-palindrome-num",
+      "title": "Java07: Số đối xứng",
+      "correct": "java/java-palindrome-num/AC/Main.java",
+      "wrong": "java/java-palindrome-num/WA/Main.java",
+      "counterexample": {
+        "stdin": "1221\n",
+        "expected_stdout": "YES\n",
+        "explanation": "Bản WA đảo nửa số nhưng chỉ so sánh theo trường hợp số chữ số lẻ, thiếu trường hợp hai nửa bằng nhau; số đối xứng chẵn chữ số 1221 bị in NO."
+      }
+    },
+    {
+      "slug": "java-word-count",
+      "title": "Java08: Đếm từ",
+      "correct": "java/java-word-count/AC/Main.java",
+      "wrong": "java/java-word-count/WA/Main.java",
+      "counterexample": {
+        "stdin": "a  b\n",
+        "expected_stdout": "2\n",
+        "explanation": "Bản WA lấy số ký tự trắng cộng 1, tính cả từ rỗng giữa hai dấu cách liên tiếp nên in 3 thay vì 2."
+      }
+    },
+    {
+      "slug": "java-binary-search",
+      "title": "Java09: Tìm kiếm nhị phân",
+      "correct": "java/java-binary-search/AC/Main.java",
+      "wrong": "java/java-binary-search/WA/Main.java",
+      "counterexample": {
+        "stdin": "1 10\n10\n",
+        "expected_stdout": "0\n",
+        "explanation": "Bản WA dùng điều kiện left < right nên không kiểm tra ứng viên cuối; với mảng một phần tử bằng X, chương trình in -1 thay vì chỉ số 0."
+      }
+    },
+    {
+      "slug": "java-matrix-diag",
+      "title": "Java10: Tổng đường chéo",
+      "correct": "java/java-matrix-diag/AC/Main.java",
+      "wrong": "java/java-matrix-diag/WA/Main.java",
+      "counterexample": {
+        "stdin": "2\n1 2\n3 9\n",
+        "expected_stdout": "10\n",
+        "explanation": "Bản WA cộng đường chéo phụ 2+3=5 thay vì đường chéo chính 1+9=10."
+      }
+    }
+  ],
+  "diagnostics": {
+    "CE": "java/_diagnostics/CE/Main.java",
+    "RE": "java/_diagnostics/RE/Main.java",
+    "TLE": "java/_diagnostics/TLE/Main.java"
+  }
+}

@@ -120,20 +120,56 @@ final class ClassManager
         });
     }
 
-    public static function assignOwner(array $actor, int $classId, int $ownerId): void
+    /** An opaque form precondition; fresh invitations distinguish revoke/reassign cycles. */
+    public static function ownerStateToken(array $class): string
+    {
+        return hash('sha256', json_encode([(int)$class['id'], $class['owner_teacher_id'] === null ? null : (int)$class['owner_teacher_id'], $class['join_code']], JSON_THROW_ON_ERROR));
+    }
+
+    public static function assignOwner(array $actor, int $classId, int $ownerId, ?string $expectedOwnerState = null): void
     {
         global $pdo;
         self::requireRole($actor, ['admin']);
-        self::transaction(function () use ($pdo, $actor, $classId, $ownerId): void {
+        self::transaction(function () use ($pdo, $actor, $classId, $ownerId, $expectedOwnerState): void {
             $users = self::lockUsers($actor, [$ownerId]);
             self::requireTeacher($users[$ownerId] ?? null);
             $class = self::lockManagedClass($actor, $classId);
+            self::checkOwnerState($class, $expectedOwnerState);
             // Existence is checked above: MySQL rowCount() is zero for an unchanged owner.
             $code = $class['join_code'] ?: self::createJoinCode();
             if ((int)$class['owner_teacher_id'] === $ownerId && $class['join_code']) return;
             $pdo->prepare('UPDATE classes SET owner_teacher_id = ?, join_code = ? WHERE id = ?')
                 ->execute([$ownerId, $code, $classId]);
             AuditLog::record($pdo, $actor, 'class.assign_owner', 'class', $classId, ['teacher_id' => $ownerId, 'source' => 'ui']);
+        });
+    }
+
+    /** expectedOwnerId is the owner shown by the form, or 0 for an unowned class. */
+    public static function revokeOwner(array $actor, int $classId, int $expectedOwnerId, ?string $expectedOwnerState = null): void
+    {
+        global $pdo;
+        self::requireRole($actor, ['admin']);
+        if (!isset($actor['auth_version'])) {
+            throw new DomainException('Quyền tài khoản đã thay đổi. Hãy đăng nhập lại.');
+        }
+        if ($expectedOwnerId < 0) {
+            throw new DomainException('Thông tin chủ quản không hợp lệ. Hãy tải lại trang và thử lại.');
+        }
+        self::transaction(function () use ($pdo, $actor, $classId, $expectedOwnerId, $expectedOwnerState): void {
+            self::lockUsers($actor);
+            $class = self::lockManagedClass($actor, $classId);
+            // Repeating a completed revocation is harmless, including a double-clicked form.
+            if ($class['owner_teacher_id'] === null && $class['join_code'] === null) return;
+            self::checkOwnerState($class, $expectedOwnerState);
+            $previousOwnerId = (int)$class['owner_teacher_id'];
+            if ($previousOwnerId !== $expectedOwnerId) {
+                throw new DomainException('Giáo viên chủ quản vừa thay đổi. Hãy tải lại trang và kiểm tra trước khi thu hồi.');
+            }
+            // Do not validate the former teacher: disabled/demoted owners must also be revocable.
+            // Membership rows, request timestamps and all learning history remain untouched.
+            $pdo->prepare('UPDATE classes SET owner_teacher_id = NULL, join_code = NULL WHERE id = ?')
+                ->execute([$classId]);
+            AuditLog::record($pdo, $actor, 'class.revoke_owner', 'class', $classId, ['teacher_id' => $previousOwnerId, 'source' => 'ui']);
         });
     }
 
@@ -302,6 +338,14 @@ final class ClassManager
             throw new DomainException('Lớp không tồn tại hoặc bạn không quản lý lớp này.');
         }
         return $class;
+    }
+
+    private static function checkOwnerState(array $class, ?string $expected): void
+    {
+        // Null preserves existing trusted internal callers; HTTP forms must always supply a token.
+        if ($expected !== null && !hash_equals(self::ownerStateToken($class), $expected)) {
+            throw new DomainException('Chủ quản hoặc mã mời vừa thay đổi. Hãy tải lại trang và kiểm tra trước khi lưu.');
+        }
     }
 
     private static function requireTeacher(?array $user): void

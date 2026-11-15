@@ -1,6 +1,7 @@
 <?php
 // frontend/partials/layout_head.php — Phần <head> + khung layout dùng chung (sidebar dọc bên trái)
-// Biến đầu vào: $pageTitle (string), $user (array|null), $activeNav (string)
+// Biến đầu vào: $pageTitle (string), $user (array|null), $activeNav (string), $pageStyles (array, tùy chọn)
+require_once __DIR__ . '/action_icons.php';
 $sbHasUser = !empty($user);
 ?>
 <!DOCTYPE html>
@@ -22,10 +23,16 @@ $sbHasUser = !empty($user);
         })();
     </script>
     <link rel="stylesheet" href="<?= url('/frontend/assets/css/algojudge.css') ?>?v=20261113-output-3">
+    <?php foreach (($pageStyles ?? []) as $pageStyle): ?>
+    <link rel="stylesheet" href="<?= e(url($pageStyle)) ?>">
+    <?php endforeach; ?>
+    <link rel="stylesheet" href="<?= e(url('/frontend/assets/css/action-icons.css')) ?>?v=20261115-4">
+    <script src="<?= e(url('/frontend/assets/js/action-icons.js')) ?>?v=20261115-4" defer></script>
     <script id="monaco-loader" src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
     <script id="alpine-cdn" src="<?= url('/frontend/assets/js/vendor/alpine.min.js') ?>" defer></script>
 </head>
 <body class="<?= $sbHasUser ? 'has-sb' : 'no-sb' ?>">
+<?= aj_action_icon_sprite() ?>
 <?php if ($sbHasUser): ?>
 <button type="button" class="sb-mobile-toggle" id="sbMobileToggle" aria-label="Mở menu">
     <span></span><span></span><span></span>

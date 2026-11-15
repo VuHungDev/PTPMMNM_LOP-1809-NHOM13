@@ -1,0 +1,120 @@
+{
+  "language": "php",
+  "programs": [
+    {
+      "slug": "php-hello-repeat",
+      "title": "PHP01: Lặp chuỗi",
+      "correct": "php/php-hello-repeat/AC/solution.php",
+      "wrong": "php/php-hello-repeat/WA/solution.php",
+      "counterexample": {
+        "stdin": "abc\n3\n",
+        "expected_stdout": "abc\nabc\nabc\n",
+        "explanation": "Vòng lặp bắt đầu từ 1 và dùng điều kiện i < N nên chỉ in N - 1 dòng. Với N = 3, bản sai chỉ in hai dòng abc thay vì ba dòng."
+      }
+    },
+    {
+      "slug": "php-sum-range",
+      "title": "PHP02: Tổng đoạn",
+      "correct": "php/php-sum-range/AC/solution.php",
+      "wrong": "php/php-sum-range/WA/solution.php",
+      "counterexample": {
+        "stdin": "1 5\n",
+        "expected_stdout": "15\n",
+        "explanation": "Bản sai dùng số phần tử B - A và đầu cuối B - 1, tức tính đoạn [A, B) thay vì [A, B]. Với 1 đến 5, nó in 10 thay vì 15."
+      }
+    },
+    {
+      "slug": "php-odd-count",
+      "title": "PHP03: Đếm số lẻ",
+      "correct": "php/php-odd-count/AC/solution.php",
+      "wrong": "php/php-odd-count/WA/solution.php",
+      "counterexample": {
+        "stdin": "1\n-7\n",
+        "expected_stdout": "1\n",
+        "explanation": "Trong PHP, -7 % 2 bằng -1. Kiểm tra phần dư bằng 1 bỏ sót số lẻ âm, nên bản sai in 0 thay vì 1."
+      }
+    },
+    {
+      "slug": "php-strrev",
+      "title": "PHP04: Đảo chuỗi",
+      "correct": "php/php-strrev/AC/solution.php",
+      "wrong": "php/php-strrev/WA/solution.php",
+      "counterexample": {
+        "stdin": "hello\n",
+        "expected_stdout": "olleh\n",
+        "explanation": "Điều kiện i > 0 dừng trước ký tự đầu tiên. Vì vậy bản sai đảo hello thành olle, làm mất chữ h cuối kết quả."
+      }
+    },
+    {
+      "slug": "php-max-digit",
+      "title": "PHP05: Chữ số lớn nhất",
+      "correct": "php/php-max-digit/AC/solution.php",
+      "wrong": "php/php-max-digit/WA/solution.php",
+      "counterexample": {
+        "stdin": "93842\n",
+        "expected_stdout": "9\n",
+        "explanation": "Vòng duyệt bắt đầu từ chỉ số 1 nên bỏ qua chữ số đầu tiên. Với 93842, chữ số 9 bị bỏ qua và bản sai in 8."
+      }
+    },
+    {
+      "slug": "php-sort-desc",
+      "title": "PHP06: Sắp xếp giảm dần",
+      "correct": "php/php-sort-desc/AC/solution.php",
+      "wrong": "php/php-sort-desc/WA/solution.php",
+      "counterexample": {
+        "stdin": "3\n3 1 2\n",
+        "expected_stdout": "3 2 1\n",
+        "explanation": "Comparator dùng left <=> right, tạo thứ tự tăng dần thay vì giảm dần. Bản sai in 1 2 3 thay vì 3 2 1."
+      }
+    },
+    {
+      "slug": "php-char-freq",
+      "title": "PHP07: Tần suất ký tự",
+      "correct": "php/php-char-freq/AC/solution.php",
+      "wrong": "php/php-char-freq/WA/solution.php",
+      "counterexample": {
+        "stdin": "bbaacc\n",
+        "expected_stdout": "a 2\n",
+        "explanation": "Duyệt a đến z nhưng thay đáp án cả khi tần suất bằng nhau, nên chọn ký tự lớn nhất khi hòa. Với a, b, c đều có tần suất 2, bản sai in c 2 thay vì a 2."
+      }
+    },
+    {
+      "slug": "php-subarray-max",
+      "title": "PHP08: Tổng đoạn lớn nhất",
+      "correct": "php/php-subarray-max/AC/solution.php",
+      "wrong": "php/php-subarray-max/WA/solution.php",
+      "counterexample": {
+        "stdin": "3\n-5 -1 -8\n",
+        "expected_stdout": "-1\n",
+        "explanation": "Khởi tạo tổng tốt nhất bằng 0 và cho phép đoạn rỗng khiến mảng toàn số âm trả về 0. Đoạn con phải không rỗng nên đáp án đúng ở đây là -1."
+      }
+    },
+    {
+      "slug": "php-prime-sum",
+      "title": "PHP09: Tổng số nguyên tố",
+      "correct": "php/php-prime-sum/AC/solution.php",
+      "wrong": "php/php-prime-sum/WA/solution.php",
+      "counterexample": {
+        "stdin": "2\n",
+        "expected_stdout": "2\n",
+        "explanation": "Vòng cộng chỉ xét các giá trị nhỏ hơn N, bỏ N nếu N là số nguyên tố. Với N = 2, bản sai in 0 thay vì 2."
+      }
+    },
+    {
+      "slug": "php-json-sum",
+      "title": "PHP10: Tổng trong chuỗi số",
+      "correct": "php/php-json-sum/AC/solution.php",
+      "wrong": "php/php-json-sum/WA/solution.php",
+      "counterexample": {
+        "stdin": "1 2, 3\n",
+        "expected_stdout": "6\n",
+        "explanation": "Bản sai chỉ tách dấu phẩy, không tách khoảng trắng. Chuỗi con 1 2 bị ép về số nguyên 1, nên tổng thành 4 thay vì 6."
+      }
+    }
+  ],
+  "diagnostics": {
+    "CE": "php/_diagnostics/CE/solution.php",
+    "RE": "php/_diagnostics/RE/solution.php",
+    "TLE": "php/_diagnostics/TLE/solution.php"
+  }
+}

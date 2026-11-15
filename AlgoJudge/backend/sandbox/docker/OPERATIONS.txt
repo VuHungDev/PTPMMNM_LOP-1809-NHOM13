@@ -1,0 +1,145 @@
+MANDATORY LINUX DOCKER JUDGE
+===========================
+Both compilation and runtime go through backend/lib/DockerSandbox.php. There is
+no host execution path, opt-out flag, mutable-tag pull or fallback without Docker.
+The synchronous web fallback only changes who orchestrates Docker. Runtime images
+are immutable/read-only; compiler artifacts remain entirely inside Docker.
+
+Operator configuration
+----------------------
+Provision and audit Linux images containing these commands:
+  c: gcc, cpp: g++, java: javac and java (JDK 17), python: python3,
+  php: php (CLI), js: node (Node 22).
+Every image also requires /usr/bin/env, GNU /usr/bin/timeout, /bin/sh, cat and sleep.
+Images must NOT declare VOLUME (implicit anonymous mounts are rejected), contain
+application config/credentials or include untrusted startup hooks. The entrypoint
+is overridden, and the program environment is cleared by env -i. Built-in Docker
+seccomp plus CPU, memory/swap and PID cgroups must be available; otherwise fail
+closed. Keep Docker Desktop in Linux-container mode on Windows. Keep the engine,
+kernel and toolchain images patched. The adapter does not guarantee immunity to
+kernel/container escapes. Dedicated judge hosts/VMs are strongly recommended.
+
+Set audited immutable identities using these environment variables:
+  AJ_SANDBOX_IMAGE_C
+  AJ_SANDBOX_IMAGE_CPP
+  AJ_SANDBOX_IMAGE_JAVA
+  AJ_SANDBOX_IMAGE_PYTHON
+  AJ_SANDBOX_IMAGE_PHP
+  AJ_SANDBOX_IMAGE_JS
+Values must be repo@sha256:<64 lowercase hex> or sha256:<64 lowercase hex> image IDs.
+No production third-party image pin is hardcoded. Missing config fails SYS_ERR.
+Alternatively, the operator's protected backend/config/sandbox_images.php can
+return an array keyed by c/cpp/java/python/php/js; environment values take priority.
+It is executable operator configuration, not writable by students or web forms.
+The Docker CLI binary defaults to docker.exe on Windows or docker on Linux.
+AJ_SANDBOX_DOCKER may be a trusted absolute binary path for service installations.
+Never set it from requests; the service account and repository must be protected.
+
+The web and worker OS accounts must see the same LOCAL trusted Docker engine and
+protected config. Never expose the engine TCP API/socket to contestant containers.
+Docker privileges are powerful host privileges; isolate the worker/web deployment
+and restrict who can alter configuration, images and the engine. No application
+environment variables, credentials, Docker socket, host namespace, device, bind
+mount or repository directory is forwarded to a contestant container. Docker CLI
+itself receives only the small OS/Docker-client environment allowlist it requires.
+
+Build recipe (explicit offline operation only)
+----------------------------------------------
+Build each language from an audited already-local digest-pinned toolchain base.
+Run from any location, using ONLY backend/sandbox/docker as the build context:
+  docker build --pull=false --network=none --build-arg BASE_IMAGE=<pinned-base>
+    -t judge-<language>:reviewed <absolute-path-to-backend/sandbox/docker>
+(The command is one line; replace placeholders yourself.)
+The recipe has no COPY/ADD, no package installs and no runtime network requirement.
+.dockerignore allows only Dockerfile and .dockerignore in the context. Do not use
+the repository root as a build context. Inspect the resulting image ID, audit it,
+and set AJ_SANDBOX_IMAGE_<LANG> to that ID, not the mutable build tag.
+No builds/pulls are performed automatically by the application or tests.
+
+Library compatibility
+---------------------
+Host-installed Python packages and backend/sandbox/nodejs/node_modules are NEVER
+mounted or copied into the sandbox. Python runs isolated UTF-8 (-I, no bytecode at
+runtime); packages must be installed into the image's system site-packages, not a
+user site. Node standard modules work; optional packages must be baked into the
+image at /opt/judge/node_modules. PHP uses -n (no php.ini/startup config); extensions
+requiring ini loading are unavailable unless explicitly supported by a reviewed
+future image/adapter change. Java supports JDK standard library and Main only;
+annotation processing is disabled at compilation. Any extra locked, scanned
+packages must be installed in an audited reproducible BUILD, never via user code
+or on-demand runtime installs. Do not promise old host packages are available.
+
+Isolation and resource contract
+--------------------------------
+Each job has a random 128-bit capability and unique 64 MiB local-driver tmpfs
+artifact volume (uid/gid 65534, nosuid,nodev). Source arrives via a private bounded
+stdin spool into a fixed source filename. Compiler container mounts artifacts RW;
+every test uses a NEW container mounting them RO. A source-less equally hardened
+lease container keeps the tmpfs mounted between tests, with a 15-minute maximum
+lease; expiry is SYS_ERR requiring a new retry run, not a learner error. Scratch
+/tmp is fresh per container, 16 MiB tmpfs, noexec/nosuid/nodev. Root FS is read-only.
+No compiled artifact, directory, archive or file created by a contestant is ever
+extracted to the host. Only bounded stdout/stderr are returned as data.
+
+All containers use uid/gid 65534, no network, IPC none, cap-drop ALL,
+no-new-privileges, Docker default seccomp, init, one CPU, no extra swap, 64 PIDs,
+64 open files and no core dumps; single file writes capped at 16 MiB. PID cgroups
+are per container; no UID-wide RLIMIT_NPROC is set, so concurrent jobs do not share
+a process allowance merely because every container uses uid 65534.
+Compilation: 30s, 512 MiB. Source: <=256 KiB. stdin: <=1 MiB per test. Custom API
+stdin: <=60000 bytes (existing TEXT storage). stdout: <=64 KiB; stderr: <=32 KiB.
+Runtime: problem's 16..1024 MiB container memory; custom defaults 256 MiB. Java
+uses problem memory as -Xmx heap plus an EXPLICIT 128 MiB cgroup overhead for VM,
+metaspace, code cache and native buffers. This is a compatibility allowance, not
+a claim that Java total memory equals the heap budget. Other languages receive
+no silent extra memory. Low limits can reject heavy libraries; tune problem limits.
+Time: 1..60000 ms per test, unified custom runtime 10000 ms for worker and fallback.
+GNU timeout enforces the wall deadline inside the container (not CLI startup),
+while an independent host watchdog also stops stalled containers/attach clients.
+Execution time is Docker start-to-finish WALL time, including in-container startup,
+not exact CPU accounting. Infrastructure startup latency and compile time are not
+charged to contestant runtime. Host watchdog has 3s orchestration grace; its limit
+removes the WHOLE container even if contestant processes stop/kill inner timeout.
+Docker container removal stops all descendants; it does not merely kill a shell.
+
+Windows uses proc_open ARRAY argv with bypass_shell and private file-backed IO,
+not blocking anonymous pipes. Host spools contain only source/stdin/output data;
+no source is evaluated on the host. The 10ms output monitor terminates the CLI
+writer before container removal. Captured results are strictly capped; physical
+spools can briefly overshoot by bytes emitted within the polling interval. Use
+OS filesystem quotas/dedicated temp volume as an additional disk-DoS defense.
+Normal/failure paths clean containers, volumes and spools in finally; shutdown
+cleanup retries outstanding job-volume removal. Abrupt OS kill or engine failure
+can still leave labeled resources. Monitor and clean ONLY abandoned resources
+with label algojudge.sandbox=mandatory-v1, after confirming no active jobs; never
+run broad docker/system/volume prune against a shared engine. Cleanup failure is
+SYS_ERR and needs an operator, never silent success or fallback to host execution.
+
+Results and history
+-------------------
+Missing config/engine/image, unsupported resource settings, failed Docker start or
+cleanup => SYS_ERR; judging_runs status SYS_ERROR and diagnostic stored internally
+in system_error_detail (not compiler_output). Syntax/compiler/resource errors =>
+CE; nonzero runtime/OOM/output limit => RE; deadline => TLE. Existing verdict enum
+has no MLE/OLE, so those are RE with a specific diagnostic. Comparator operates
+on raw captured bytes and the expected output remains ONLY in the trusted judge.
+Diagnostics stored in UTF-8 SQL columns are repaired/truncated only for storage;
+raw output used for matching is unchanged. Completed judging/custom rows cannot
+be restarted. Queued work is claimed by conditional update to prevent daemon/web
+races. Retrying/rejudging creates a NEW run; past source/verdicts/case results and
+drafts are not rewritten. Latest-run guard still prevents late historical results
+from overwriting a newer run. SYS_ERR score is zero even if some cases passed.
+
+Tests (no .env reads or working DB changes)
+------------------------------------------
+Set test image env vars to reviewed locally installed identities, then run:
+  php backend/tests/docker_sandbox_smoke.php
+  php backend/tests/docker_sandbox_isolation_tests.php
+The workflow test uses ONLY the existing isolated database named in its source,
+port 3307, and rolls back all fixtures in one transaction; no schema changes:
+  php backend/tests/docker_sandbox_workflow_tests.php
+The daemon test invokes actual --once worker subprocesses. Each wrapper seeds
+fixtures and invokes the production worker inside ONE rollback-only transaction
+in that same isolated database, including heartbeat; no fixture is committed:
+  php backend/tests/docker_sandbox_daemon_tests.php
+Do not run legacy mandatory tests against the working DB as part of deployment.

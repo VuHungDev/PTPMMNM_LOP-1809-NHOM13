@@ -31,7 +31,7 @@ $page = min($page, $totalPages);
 $offset = ($page - 1) * $perPage;
 
 $submissions = $pdo->prepare("
-    SELECT s.*, u.username, $classNamesSql AS class_names, p.title AS problem_title, p.current_version_id, pv.version_number AS sub_ver_num,
+    SELECT s.*, u.username, u.full_name, $classNamesSql AS class_names, p.title AS problem_title, p.current_version_id, pv.version_number AS sub_ver_num,
            (SELECT GROUP_CONCAT(CONCAT(jr.run_number, '|', jr.trigger_type, '|', jr.verdict, '|', jr.pass_count, '|', jr.total_cases, '|', jr.score, '|', v.version_number) SEPARATOR ';;')
             FROM judging_runs jr JOIN problem_versions v ON v.id = jr.problem_version_id
             WHERE jr.submission_id = s.id ORDER BY jr.run_number ASC) AS runs_blob
@@ -54,9 +54,6 @@ require FE_DIR . '/partials/layout_head.php';
 ?>
 <div style="max-width:1280px; margin:28px auto; padding:0 24px;">
     <h2 style="margin-bottom:6px;">Chấm lại (Rejudge) &amp; Đối chiếu kết quả</h2>
-    <p style="color:var(--cl-muted); margin-bottom:20px;">
-        Giữ nguyên mã nguồn và kết quả các lần chấm trước; tạo lượt chấm mới trên bộ dữ liệu hiện hành để đối chiếu trực tiếp.
-    </p>
 
     <form method="GET" style="display:flex; gap:10px; margin-bottom:16px; background:#fff; padding:14px; border-radius:10px; align-items:end;">
         <div class="form-group" style="margin:0; min-width:260px;"><label>Lọc theo bài tập</label>
@@ -96,7 +93,7 @@ require FE_DIR . '/partials/layout_head.php';
                 ?>
                 <tr style="border-bottom:1px solid var(--cl-border);">
                     <td style="padding:10px; font-weight:700;">#<?= (int)$s['id'] ?></td>
-                    <td style="padding:10px;"><?= e($s['username']) ?><br><small style="color:var(--cl-muted);"><?= e($s['class_names'] ?: '—') ?></small></td>
+                    <td style="padding:10px;"><?= e($user['role'] === 'teacher' ? ($s['full_name'] ?: 'Chưa cập nhật họ tên') : $s['username']) ?><br><small style="color:var(--cl-muted);"><?= e($s['class_names'] ?: '—') ?></small></td>
                     <td style="padding:10px;"><?= e($s['problem_title']) ?></td>
                     <td style="padding:10px;">
                         <?php foreach ($runs as $r): ?>

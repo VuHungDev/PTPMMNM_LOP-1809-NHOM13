@@ -22,7 +22,7 @@ $totalPages = max(1, (int)ceil($totalRows / $perPage));
 $page = min($page, $totalPages);
 $offset = ($page - 1) * $perPage;
 $runsStmt = $pdo->prepare("
-    SELECT jr.*, s.language, u.username, $classNamesSql AS class_names, p.title AS problem_title, pv.version_number,
+    SELECT jr.*, s.language, u.username, u.full_name, $classNamesSql AS class_names, p.title AS problem_title, pv.version_number,
            TIMESTAMPDIFF(MINUTE, jr.created_at, NOW()) AS age_min
     FROM judging_runs jr
     JOIN submissions s ON s.id = jr.submission_id
@@ -94,7 +94,7 @@ require FE_DIR . '/partials/layout_head.php';
                 <tr style="border-bottom:1px solid var(--cl-border); <?= $stuck ? 'background:#fffbeb;' : '' ?>">
                     <td style="padding:10px; font-weight:700;">#<?= (int)$r['id'] ?> <small style="color:var(--cl-muted);">(lần <?= (int)$r['run_number'] ?>)</small></td>
                     <td style="padding:10px;">#<?= (int)$r['submission_id'] ?> <code><?= e($r['language']) ?></code></td>
-                    <td style="padding:10px;"><?= e($r['username']) ?><br><small style="color:var(--cl-muted);"><?= e($r['class_names'] ?: '—') ?></small></td>
+                    <td style="padding:10px;"><?= e($user['role'] === 'teacher' ? ($r['full_name'] ?: 'Chưa cập nhật họ tên') : $r['username']) ?><br><small style="color:var(--cl-muted);"><?= e($r['class_names'] ?: '—') ?></small></td>
                     <td style="padding:10px;"><?= e($r['problem_title']) ?><br><small style="color:var(--cl-muted);">test v<?= (int)$r['version_number'] ?>.0</small></td>
                     <td style="padding:10px;"><code><?= e($r['trigger_type']) ?></code><br><span class="badge verdict-<?= e($r['verdict']) ?>"><?= e($r['status']) ?></span></td>
                     <td style="padding:10px;"><?= (int)$r['age_min'] ?> phút<?= $stuck ? '<br><span class="badge verdict-TLE">KẸT?</span>' : '' ?></td>

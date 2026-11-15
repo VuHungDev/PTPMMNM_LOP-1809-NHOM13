@@ -635,6 +635,16 @@
             label.appendChild(this.element('span', '', text));
             parent.appendChild(label);
         }
+        deleteButton(label, action) {
+            const button = this.button(label, action, true);
+            button.setAttribute('aria-label', label);
+            button.setAttribute('data-action-label', label);
+            button.setAttribute('title', label);
+            if (global.AlgoJudge && typeof global.AlgoJudge.decorateActionButton === 'function') {
+                global.AlgoJudge.decorateActionButton(button, 'delete', label);
+            }
+            return button;
+        }
         renderEditor() {
             const editor = this.refs['draft-editor'];
             const d = this.state.local;
@@ -664,13 +674,13 @@
                 const row = this.element('div', 'chatbot-case');
                 const header = this.element('div', 'chatbot-case__header');
                 header.appendChild(this.element('h5', '', 'Test #' + (index + 1)));
-                header.appendChild(this.button('Xóa test ' + (index + 1), () => {
+                header.appendChild(this.deleteButton('Xóa test ' + (index + 1), () => {
                     if (this.state.operation || !this.isReview()) return;
                     d.test_cases.splice(index, 1);
                     this.changed();
                     this.renderEditor();
                     this.refresh();
-                }, true));
+                }));
                 row.appendChild(header);
                 const cells = this.grid(row);
                 this.field(cells, 'Input (stdin)', 'test_cases.' + index + '.stdin', test.stdin, value => { test.stdin = value; }, { rows: 3, literal: true });
@@ -701,11 +711,11 @@
             values.forEach((value, index) => {
                 const row = this.element('div', 'chatbot-list-item');
                 this.field(row, labels[field] + ' ' + (index + 1), field + '.' + index, value, text => { values[index] = text; }, { rows: 2 });
-                row.appendChild(this.button('Xóa dòng ' + (index + 1), () => {
+                row.appendChild(this.deleteButton('Xóa dòng ' + (index + 1) + ' — ' + labels[field], () => {
                     if (this.state.operation || !this.isReview()) return;
                     values.splice(index, 1);
                     this.changed(); this.renderEditor(); this.refresh();
-                }, true));
+                }));
                 section.appendChild(row);
             });
             section.appendChild(this.button('+ Thêm ' + (field === 'assumptions' ? 'giả định' : 'cảnh báo'), () => {

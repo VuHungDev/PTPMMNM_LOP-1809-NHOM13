@@ -7,6 +7,7 @@
 // lập tức — kể cả tab đang mở hay phiên đăng nhập khác — buộc đăng xuất.
 
 require_once __DIR__ . '/../config/bootstrap.php';
+require_once __DIR__ . '/AdminPolicy.php';
 
 final class Auth
 {

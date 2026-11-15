@@ -5,6 +5,7 @@
 
 require_once __DIR__ . '/../config/bootstrap.php';
 require_once __DIR__ . '/OutputComparator.php';
+require_once __DIR__ . '/DockerSandbox.php';
 
 final class JudgeEngine
 {
@@ -27,209 +28,34 @@ final class JudgeEngine
         return OutputComparator::normalize($out);
     }
 
-    private static function bin(string $exe): string
-    {
-        return $exe . (PHP_OS_FAMILY === 'Windows' ? '.exe' : '');
-    }
-
-    // Kiểm tra công cụ biên dịch/thông dịch có tồn tại không, TRƯỚC khi đổ lỗi cho code.
-    // Thiếu toolchain là lỗi hệ thống (SYS_ERR, được thử lại), không phải lỗi của học viên.
-    private static function toolAvailable(string $exe): bool
-    {
-        // Đường dẫn tuyệt đối (vd PHP_BIN khi chạy qua Apache): kiểm tra file trực tiếp.
-        if (strpbrk($exe, '/\\') !== false) {
-            return is_file($exe) && is_executable($exe);
-        }
-        $probe = PHP_OS_FAMILY === 'Windows'
-            ? 'where ' . escapeshellarg($exe) . ' 2>NUL'
-            : 'command -v ' . escapeshellarg($exe) . ' >/dev/null 2>&1';
-        exec($probe, $out, $code);
-        return $code === 0;
-    }
-
-    private static function missingToolchain(string $lang): array
-    {
-        $hint = [
-            'c'   => 'Máy chấm chưa cài trình biên dịch C (gcc). Hãy cài MSYS2 (gói mingw-w64-ucrt-x86_64-gcc) rồi khởi động lại Apache.',
-            'cpp' => 'Máy chấm chưa cài trình biên dịch C++ (g++). Hãy cài MSYS2 (gói mingw-w64-ucrt-x86_64-gcc) rồi khởi động lại Apache.',
-        ][$lang] ?? ('Máy chấm thiếu công cụ thực thi ngôn ngữ ' . $lang . '. Hãy liên hệ quản trị viên.');
-        return ['ok' => false, 'type' => 'SYS_ERR', 'message' => $hint];
-    }
-
-    // Ghép biến môi trường vào đầu lệnh cho đúng cú pháp shell từng HĐH.
-    // Windows (cmd.exe): set "K=V" && <cmd> — cú pháp sh (K=V cmd) không chạy được.
-    private static function withEnv(array $env, string $cmd): string
-    {
-        if (PHP_OS_FAMILY === 'Windows') {
-            $prefix = '';
-            foreach ($env as $k => $v) {
-                $prefix .= 'set "' . $k . '=' . $v . '" && ';
-            }
-            return $prefix . $cmd;
-        }
-        $prefix = '';
-        foreach ($env as $k => $v) {
-            $prefix .= $k . '=' . escapeshellarg($v) . ' ';
-        }
-        return $prefix . $cmd;
-    }
-
-    // Toolchain MSYS2 cần thư mục bin của nó trong PATH để cc1.exe load được
-    // các DLL phụ thuộc (libisl, libmpfr...). PATH của Apache service thường
-    // không có thư mục này nên phải bổ sung mỗi lần gọi biên dịch.
-    private static function toolchainEnv(string $exe): array
-    {
-        if (PHP_OS_FAMILY === 'Windows' && strpbrk($exe, '/\\') !== false) {
-            $dir = str_replace('/', DIRECTORY_SEPARATOR, dirname($exe));
-            return ['PATH' => $dir . ';' . getenv('PATH')];
-        }
-        return [];
-    }
-
-    public static function compileOrCheckSyntax(string $lang, string $sourceCode, string $workDir): array
+    public static function prepareProgram(string $lang, string $sourceCode, int $memoryLimitKb = DockerSandbox::DEFAULT_MEMORY_KB): array
     {
         if (defined('JUDGE_SANDBOX_SIMULATE_DOWN') && JUDGE_SANDBOX_SIMULATE_DOWN === true) {
-            return ['ok' => false, 'type' => 'SYS_ERR', 'message' => 'Sandbox Runner Service Unreachable'];
+            return ['ok' => false, 'type' => 'SYS_ERR', 'message' => 'Docker sandbox service unreachable (no host fallback).'];
         }
-
-        $isWin = PHP_OS_FAMILY === 'Windows';
-
-        // Công cụ nào dùng cho từng ngôn ngữ — kiểm tra sự tồn tại TRƯỚC khi biên dịch.
-        $needTool = [
-            'python' => PYTHON_BIN,
-            'cpp'    => self::bin(GPP_BIN),
-            'c'      => self::bin(GCC_BIN),
-            'java'   => self::bin(JAVAC_BIN),
-            'php'    => PHP_BIN,
-            'js'     => NODE_BIN,
-        ];
-        if (isset($needTool[$lang]) && !self::toolAvailable($needTool[$lang])) {
-            return self::missingToolchain($lang);
-        }
-
-        switch ($lang) {
-            case 'python': {
-                $src = $workDir . DIRECTORY_SEPARATOR . 'solution.py';
-                file_put_contents($src, $sourceCode);
-                // Ép UTF-8 cho mọi tiến trình Python của máy chấm: Windows mặc định
-                // dùng cp1252 cho pipe khiến input()/print() có tiếng Việt bị
-                // UnicodeEncodeError và sinh bytes lỗi làm vỡ cột DB (utf8mb4).
-                $pyEnv = ['PYTHONIOENCODING' => 'utf-8'];
-                exec(self::withEnv($pyEnv, PYTHON_BIN . ' -m py_compile ' . escapeshellarg($src) . ' 2>&1'), $out, $code);
-                if ($code !== 0) {
-                    return ['ok' => false, 'type' => 'CE', 'message' => implode("\n", $out)];
-                }
-                return ['ok' => true, 'exec_cmd' => self::withEnv($pyEnv, PYTHON_BIN . ' ' . escapeshellarg($src))];
-            }
-            case 'cpp': {
-                $src = $workDir . DIRECTORY_SEPARATOR . 'solution.cpp';
-                $bin = $workDir . DIRECTORY_SEPARATOR . ($isWin ? 'solution.exe' : 'solution.out');
-                file_put_contents($src, $sourceCode);
-                exec(self::withEnv(self::toolchainEnv(GPP_BIN), self::bin(GPP_BIN) . ' -O2 -std=c++17 ' . escapeshellarg($src) . ' -o ' . escapeshellarg($bin) . ' 2>&1'), $out, $code);
-                if ($code !== 0) {
-                    return ['ok' => false, 'type' => 'CE', 'message' => implode("\n", $out)];
-                }
-                return ['ok' => true, 'exec_cmd' => self::withEnv(self::toolchainEnv(GPP_BIN), escapeshellarg($bin))];
-            }
-            case 'c': {
-                $src = $workDir . DIRECTORY_SEPARATOR . 'solution.c';
-                $bin = $workDir . DIRECTORY_SEPARATOR . ($isWin ? 'solution_c.exe' : 'solution_c.out');
-                file_put_contents($src, $sourceCode);
-                exec(self::withEnv(self::toolchainEnv(GCC_BIN), self::bin(GCC_BIN) . ' -O2 -std=c11 ' . escapeshellarg($src) . ' -o ' . escapeshellarg($bin) . ' 2>&1'), $out, $code);
-                if ($code !== 0) {
-                    return ['ok' => false, 'type' => 'CE', 'message' => implode("\n", $out)];
-                }
-                return ['ok' => true, 'exec_cmd' => self::withEnv(self::toolchainEnv(GCC_BIN), escapeshellarg($bin))];
-            }
-            case 'java': {
-                $src = $workDir . DIRECTORY_SEPARATOR . 'Main.java';
-                file_put_contents($src, $sourceCode);
-                exec(escapeshellarg(self::bin(JAVAC_BIN)) . ' -encoding UTF-8 ' . escapeshellarg($src) . ' 2>&1', $out, $code);
-                if ($code !== 0) {
-                    return ['ok' => false, 'type' => 'CE', 'message' => implode("\n", $out)];
-                }
-                return ['ok' => true, 'exec_cmd' => escapeshellarg(self::bin(JAVA_BIN)) . ' -cp ' . escapeshellarg($workDir) . ' Main'];
-            }
-            case 'php': {
-                $src = $workDir . DIRECTORY_SEPARATOR . 'solution.php';
-                file_put_contents($src, $sourceCode);
-                exec(escapeshellarg(PHP_BIN) . ' -l ' . escapeshellarg($src) . ' 2>&1', $out, $code);
-                if ($code !== 0) {
-                    return ['ok' => false, 'type' => 'CE', 'message' => implode("\n", $out)];
-                }
-                return ['ok' => true, 'exec_cmd' => escapeshellarg(PHP_BIN) . ' ' . escapeshellarg($src)];
-            }
-            case 'js': {
-                $src = $workDir . DIRECTORY_SEPARATOR . 'solution.js';
-                file_put_contents($src, $sourceCode);
-                // NODE_PATH trỏ vào sandbox npm của máy chấm để require() được
-                // các gói đã cài sẵn (lodash, mathjs, dayjs...); code vẫn chạy
-                // trong tiến trình OS con riêng qua proc_open.
-                $nodeEnv = ['NODE_PATH' => NODE_SANDBOX_DIR . DIRECTORY_SEPARATOR . 'node_modules'];
-                exec(self::withEnv($nodeEnv, NODE_BIN . ' --check ' . escapeshellarg($src) . ' 2>&1'), $out, $code);
-                if ($code !== 0) {
-                    return ['ok' => false, 'type' => 'CE', 'message' => implode("\n", $out)];
-                }
-                return ['ok' => true, 'exec_cmd' => self::withEnv($nodeEnv, NODE_BIN . ' ' . escapeshellarg($src))];
-            }
-        }
-
-        return ['ok' => false, 'type' => 'SYS_ERR', 'message' => 'Unsupported language'];
+        return DockerSandbox::prepare($lang, $sourceCode, $memoryLimitKb);
     }
 
-    public static function runSingleTestCase(string $execCmd, string $stdinData, int $timeLimitMs): array
+    // Compatibility entry point: caller workDir is ignored. Source and artifacts
+    // live only in the helper-owned isolated job. exec_cmd is an opaque ARRAY handle.
+    public static function compileOrCheckSyntax(string $lang, string $sourceCode, string $workDir = '', int $memoryLimitKb = DockerSandbox::DEFAULT_MEMORY_KB): array
+    {
+        $result = self::prepareProgram($lang, $sourceCode, $memoryLimitKb);
+        if ($result['ok']) $result['exec_cmd'] = $result['program'];
+        return $result;
+    }
+
+    public static function runSingleTestCase($program, string $stdinData, int $timeLimitMs): array
     {
         if (defined('JUDGE_SANDBOX_SIMULATE_DOWN') && JUDGE_SANDBOX_SIMULATE_DOWN === true) {
-            return ['verdict' => 'SYS_ERR', 'time_ms' => 0, 'exit_code' => -1, 'stdout' => '', 'stderr' => 'Runner disconnected'];
+            return ['verdict' => 'SYS_ERR', 'time_ms' => 0, 'exit_code' => -1, 'stdout' => '', 'stderr' => 'Docker sandbox disconnected (no host fallback).'];
         }
+        return DockerSandbox::run($program, $stdinData, $timeLimitMs);
+    }
 
-        $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-        $startTime = microtime(true);
-        $process = @proc_open($execCmd, $descriptors, $pipes);
-
-        if (!is_resource($process)) {
-            return ['verdict' => 'SYS_ERR', 'time_ms' => 0, 'exit_code' => -1, 'stdout' => '', 'stderr' => 'Cannot spawn isolated process'];
-        }
-
-        fwrite($pipes[0], $stdinData);
-        fclose($pipes[0]);
-        stream_set_blocking($pipes[1], false);
-        stream_set_blocking($pipes[2], false);
-
-        $stdout = '';
-        $stderr = '';
-        $timedOut = false;
-
-        while (true) {
-            $status = proc_get_status($process);
-            $stdout .= (string)stream_get_contents($pipes[1]);
-            $stderr .= (string)stream_get_contents($pipes[2]);
-            $elapsedMs = (int)round((microtime(true) - $startTime) * 1000);
-            if ($elapsedMs > $timeLimitMs) {
-                $timedOut = true;
-                proc_terminate($process, 9);
-                break;
-            }
-            if (!$status['running']) {
-                break;
-            }
-            usleep(10000);
-        }
-
-        $stdout .= (string)stream_get_contents($pipes[1]);
-        $stderr .= (string)stream_get_contents($pipes[2]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-        $exitCode = proc_close($process);
-        $elapsedMs = (int)round((microtime(true) - $startTime) * 1000);
-
-        if ($timedOut) {
-            return ['verdict' => 'TLE', 'time_ms' => $timeLimitMs, 'exit_code' => $exitCode, 'stdout' => mb_substr($stdout, 0, 1024), 'stderr' => 'Time Limit Exceeded'];
-        }
-        if ($exitCode !== 0) {
-            return ['verdict' => 'RE', 'time_ms' => $elapsedMs, 'exit_code' => $exitCode, 'stdout' => mb_substr($stdout, 0, 1024), 'stderr' => mb_substr($stderr, 0, 1024)];
-        }
-        return ['verdict' => 'OK', 'time_ms' => $elapsedMs, 'exit_code' => 0, 'stdout' => $stdout, 'stderr' => $stderr];
+    public static function releaseProgram($program): bool
+    {
+        return DockerSandbox::release($program);
     }
 
     // Phân tích stderr thành: dòng lỗi trong mã nguồn + thông điệp gọn + gợi ý tiếng Việt.
@@ -259,7 +85,7 @@ final class JudgeEngine
                 $message = $lastLine;
                 if (stripos($stderr, 'ModuleNotFoundError') !== false) {
                     preg_match("/No module named '([^']+)'/", $stderr, $mm);
-                    $hint = 'Thiếu thư viện Python' . (isset($mm[1]) ? " '" . $mm[1] . "'" : '') . '. Máy chấm đã có sẵn numpy, pandas, requests, scikit-learn, matplotlib, scipy, sympy. Tên thư viện khác cần liên hệ quản trị viên để cài thêm.';
+                    $hint = 'Thiếu thư viện Python' . (isset($mm[1]) ? " '" . $mm[1] . "'" : '') . '. Chỉ các gói được quản trị viên đóng sẵn trong image Docker mới sử dụng được; không dùng thư viện trên máy chủ, cài gói hoặc truy cập mạng khi chạy.';
                 } elseif (stripos($stderr, 'EOFError') !== false) {
                     $hint = 'Chương trình gọi input() nhưng ô "Dữ liệu nhập" đang trống. Hãy nhập dữ liệu vào ô rồi bấm Chạy lại.';
                 } elseif (stripos($stderr, 'SyntaxError') !== false || stripos($stderr, 'IndentationError') !== false) {
@@ -288,7 +114,7 @@ final class JudgeEngine
                     }
                 }
                 if (stripos($stderr, 'Cannot find module') !== false) {
-                    $hint = 'Thiếu module Node: Sân chơi chỉ hỗ trợ các module có sẵn (fs, path, readline, util, crypto, os...). Module ngoài (npm) cần liên hệ quản trị viên.';
+                    $hint = 'Thiếu module Node: hỗ trợ module chuẩn và các gói npm đã được đóng sẵn trong ảnh Docker tại /opt/judge/node_modules. Không dùng thư viện trên máy chủ hoặc cài gói khi chạy.';
                 } elseif (stripos($stderr, 'SyntaxError') !== false) {
                     $hint = 'Lỗi cú pháp JavaScript: kiểm tra ngoặc, dấu chấm phẩy và từ khóa ở dòng báo lỗi.';
                 } elseif (stripos($stderr, 'ReferenceError') !== false) {
@@ -350,8 +176,11 @@ final class JudgeEngine
 
     public static function processJudgingRun(PDO $pdo, int $runId, bool $simulateDown = false): array
     {
+        // Do not join an outer REPEATABLE READ snapshot or hold its locks while
+        // the Docker-isolated program runs. It would invalidate the first-solve serialization below.
+        if ($pdo->inTransaction()) throw new LogicException('Judging must run outside a caller transaction.');
         $stmt = $pdo->prepare("
-            SELECT jr.*, s.language, s.source_code, pv.time_limit_ms
+            SELECT jr.*, s.user_id, s.language, s.source_code, pv.time_limit_ms, pv.memory_limit_kb
             FROM judging_runs jr
             JOIN submissions s ON s.id = jr.submission_id
             JOIN problem_versions pv ON pv.id = jr.problem_version_id
@@ -359,93 +188,155 @@ final class JudgeEngine
         ");
         $stmt->execute([$runId]);
         $run = $stmt->fetch();
-        if (!$run) {
-            return ['error' => 'Run not found'];
+        if (!$run) return ['error' => 'Run not found', 'verdict' => 'SYS_ERR'];
+
+        // Short parent-before-run transactions are shared by claim, case writes,
+        // finalization and retry. Never hold DB locks during sandbox execution.
+        $pdo->beginTransaction();
+        try {
+            if (self::lockActiveRun($pdo, (int)$run['submission_id'], $runId, 'QUEUED') === null) {
+                $pdo->commit();
+                return self::skippedRun($pdo, $runId);
+            }
+            $claim = $pdo->prepare("UPDATE judging_runs SET status = 'RUNNING', started_at = NOW() WHERE id = ? AND status = 'QUEUED'");
+            $claim->execute([$runId]);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $e;
         }
 
-        $pdo->prepare("UPDATE judging_runs SET status = 'RUNNING', started_at = NOW() WHERE id = ?")->execute([$runId]);
-
-        if ($simulateDown || (defined('JUDGE_SANDBOX_SIMULATE_DOWN') && JUDGE_SANDBOX_SIMULATE_DOWN)) {
-            $pdo->prepare("
-                UPDATE judging_runs
-                SET status = 'SYS_ERROR', verdict = 'SYS_ERR', system_error_detail = 'Isolated Runner Connection Refused', finished_at = NOW()
-                WHERE id = ?
-            ")->execute([$runId]);
-            self::syncLatestRunToSubmission($pdo, (int)$run['submission_id'], $runId, 'SYS_ERR', 0, 0, 0);
-            return ['verdict' => 'SYS_ERR'];
-        }
-
-        $workDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'cl_oj_run_' . $runId . '_' . uniqid();
-        @mkdir($workDir, 0700, true);
-
-        $compileRes = self::compileOrCheckSyntax($run['language'], $run['source_code'], $workDir);
-        if (!$compileRes['ok']) {
-            $verdict = $compileRes['type'] === 'CE' ? 'CE' : 'SYS_ERR';
-            $status  = $verdict === 'CE' ? 'COMPLETED' : 'SYS_ERROR';
-            $pdo->prepare("
-                UPDATE judging_runs SET status = ?, verdict = ?, compiler_output = ?, finished_at = NOW() WHERE id = ?
-            ")->execute([$status, $verdict, $compileRes['message'], $runId]);
-            self::syncLatestRunToSubmission($pdo, (int)$run['submission_id'], $runId, $verdict, 0, 0, 0);
-            self::cleanupDir($workDir);
-            return ['verdict' => $verdict];
-        }
-
-        $stmtCases = $pdo->prepare("SELECT * FROM test_cases WHERE problem_version_id = ? ORDER BY case_order ASC");
-        $stmtCases->execute([$run['problem_version_id']]);
-        $cases = $stmtCases->fetchAll();
-
-        $totalCases = count($cases);
+        $program = null;
         $passCount = 0;
         $totalScore = 0;
+        $totalCases = 0;
         $maxTimeMs = 0;
-        $overallVerdict = 'AC';
-
-        $pdo->prepare("DELETE FROM case_results WHERE judging_run_id = ?")->execute([$runId]);
-        $insCaseRes = $pdo->prepare("
-            INSERT INTO case_results (judging_run_id, test_case_id, verdict, execution_time_ms, exit_code, actual_output, runtime_error)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ");
-
-        foreach ($cases as $tc) {
-            $exec = self::runSingleTestCase($compileRes['exec_cmd'], $tc['stdin_data'], (int)$run['time_limit_ms']);
-            $maxTimeMs = max($maxTimeMs, $exec['time_ms']);
-
-            if ($exec['verdict'] === 'OK') {
-                if (OutputComparator::matches($exec['stdout'], $tc['expected_output'])) {
-                    $caseVerdict = 'AC';
-                    $passCount++;
-                    $totalScore += (int)$tc['points'];
+        $overallVerdict = 'SYS_ERR';
+        $compilerOutput = null;
+        $systemError = null;
+        try {
+            if ($simulateDown || (defined('JUDGE_SANDBOX_SIMULATE_DOWN') && JUDGE_SANDBOX_SIMULATE_DOWN)) {
+                throw new RuntimeException('Docker sandbox service unreachable (no host fallback).');
+            }
+            $compileRes = self::prepareProgram($run['language'], $run['source_code'], (int)$run['memory_limit_kb']);
+            if (!$compileRes['ok']) {
+                if ($compileRes['type'] === 'CE') {
+                    $overallVerdict = 'CE';
+                    $compilerOutput = $compileRes['message'];
                 } else {
-                    $caseVerdict = 'WA';
+                    $systemError = $compileRes['message'];
                 }
             } else {
-                $caseVerdict = $exec['verdict'];
+                $program = $compileRes['program'];
+                $stmtCases = $pdo->prepare("SELECT * FROM test_cases WHERE problem_version_id = ? ORDER BY case_order ASC");
+                $stmtCases->execute([$run['problem_version_id']]);
+                $cases = $stmtCases->fetchAll();
+                $totalCases = count($cases);
+                if ($totalCases === 0) throw new RuntimeException('Problem version has no test cases.');
+                $overallVerdict = 'AC';
+                foreach ($cases as $tc) {
+                    // expected_output stays in the trusted judge, never in the isolated job.
+                    $exec = self::runSingleTestCase($program, $tc['stdin_data'], (int)$run['time_limit_ms']);
+                    $maxTimeMs = max($maxTimeMs, $exec['time_ms']);
+                    $caseVerdict = $exec['verdict'];
+                    if ($caseVerdict === 'OK') {
+                        $caseVerdict = OutputComparator::matches($exec['stdout'], $tc['expected_output']) ? 'AC' : 'WA';
+                        if ($caseVerdict === 'AC') { $passCount++; $totalScore += (int)$tc['points']; }
+                    }
+                    if ($caseVerdict !== 'AC' && $overallVerdict === 'AC') $overallVerdict = $caseVerdict;
+                    // Infrastructure failure takes priority even after an earlier WA/RE.
+                    if ($caseVerdict === 'SYS_ERR') {
+                        $overallVerdict = 'SYS_ERR';
+                        $systemError = $exec['stderr'];
+                    }
+                    if (!self::persistActiveCase($pdo, (int)$run['submission_id'], $runId, [
+                        $runId, $tc['id'], $caseVerdict, $exec['time_ms'], $exec['exit_code'],
+                        DockerSandbox::storageText($exec['stdout']), DockerSandbox::storageText($exec['stderr']),
+                    ])) break;
+                    if ($caseVerdict === 'SYS_ERR') break;
+                }
             }
-
-            if ($caseVerdict !== 'AC' && $overallVerdict === 'AC') {
-                $overallVerdict = $caseVerdict;
+        } catch (Throwable $e) {
+            $overallVerdict = 'SYS_ERR';
+            $systemError = DockerSandbox::storageText($e->getMessage());
+        } finally {
+            if ($program !== null && !self::releaseProgram($program)) {
+                $overallVerdict = 'SYS_ERR';
+                $systemError = 'Docker sandbox cleanup failed; operator cleanup is required.';
             }
-
-            $insCaseRes->execute([$runId, $tc['id'], $caseVerdict, $exec['time_ms'], $exec['exit_code'], $exec['stdout'], $exec['stderr']]);
         }
-
-        $runStatus = ($overallVerdict === 'SYS_ERR') ? 'SYS_ERROR' : 'COMPLETED';
-        $pdo->prepare("
-            UPDATE judging_runs
-            SET status = ?, verdict = ?, score = ?, pass_count = ?, total_cases = ?, max_time_ms = ?, finished_at = NOW()
-            WHERE id = ?
-        ")->execute([$runStatus, $overallVerdict, $totalScore, $passCount, $totalCases, $maxTimeMs, $runId]);
-
-        self::syncLatestRunToSubmission($pdo, (int)$run['submission_id'], $runId, $overallVerdict, $totalScore, $passCount, $totalCases);
-
-        // Cộng XP khi học viên giải đúng một bài LẦN ĐẦU (first-AC): 10 XP × độ khó
-        // Easy=10, Medium=20, Hard=30. Không cộng lại cho lần AC tiếp theo cùng bài.
-        if ($overallVerdict === 'AC') {
-            self::awardFirstSolveXp($pdo, (int)$run['submission_id']);
+        if ($overallVerdict === 'SYS_ERR') $totalScore = 0;
+        $runStatus = $overallVerdict === 'SYS_ERR' ? 'SYS_ERROR' : 'COMPLETED';
+        $pdo->beginTransaction();
+        try {
+            // XP for different submissions of one student must serialize BEFORE
+            // taking any submission/run locks (same user-first order as the APIs).
+            $owner = $pdo->prepare('SELECT id FROM users WHERE id = ? FOR UPDATE');
+            $owner->execute([(int)$run['user_id']]);
+            if (!$owner->fetchColumn() || self::lockActiveRun($pdo, (int)$run['submission_id'], $runId) === null) {
+                $pdo->commit();
+                return self::skippedRun($pdo, $runId);
+            }
+            // Check history before replacing the submission's old verdict; this
+            // also remembers legacy AC submissions that have no judging-run row.
+            if ($overallVerdict === 'AC') self::awardActiveFirstSolveXp($pdo, (int)$run['submission_id'], $runId);
+            $finish = $pdo->prepare("
+                UPDATE judging_runs
+                SET status = ?, verdict = ?, score = ?, pass_count = ?, total_cases = ?, max_time_ms = ?,
+                    compiler_output = ?, system_error_detail = ?, finished_at = NOW()
+                WHERE id = ? AND status = 'RUNNING'
+            ");
+            $finish->execute([$runStatus, $overallVerdict, $totalScore, $passCount, $totalCases, $maxTimeMs, $compilerOutput, $systemError, $runId]);
+            if ($finish->rowCount() !== 1) {
+                $pdo->rollBack();
+                return self::skippedRun($pdo, $runId);
+            }
+            self::syncLatestRunToSubmission($pdo, (int)$run['submission_id'], $runId, $overallVerdict, $totalScore, $passCount, $totalCases);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $e;
         }
-
-        self::cleanupDir($workDir);
         return ['verdict' => $overallVerdict, 'score' => $totalScore, 'pass_count' => $passCount, 'total_cases' => $totalCases];
+    }
+
+    /** Caller owns a short transaction; always lock the parent before its run. */
+    private static function lockActiveRun(PDO $pdo, int $submissionId, int $runId, string $status = 'RUNNING'): ?array
+    {
+        if (!$pdo->inTransaction()) throw new LogicException('Active-run fence requires a transaction.');
+        $parent = $pdo->prepare('SELECT latest_run_id FROM submissions WHERE id = ? FOR UPDATE');
+        $parent->execute([$submissionId]);
+        $sub = $parent->fetch();
+        if (!$sub || (int)$sub['latest_run_id'] !== $runId) return null;
+        $stmt = $pdo->prepare('SELECT * FROM judging_runs WHERE id = ? AND submission_id = ? FOR UPDATE');
+        $stmt->execute([$runId, $submissionId]);
+        $run = $stmt->fetch();
+        return $run && $run['status'] === $status ? $run : null;
+    }
+
+    private static function persistActiveCase(PDO $pdo, int $submissionId, int $runId, array $values): bool
+    {
+        $pdo->beginTransaction();
+        try {
+            if (self::lockActiveRun($pdo, $submissionId, $runId) === null) {
+                $pdo->commit();
+                return false;
+            }
+            $pdo->prepare('INSERT INTO case_results (judging_run_id, test_case_id, verdict, execution_time_ms, exit_code, actual_output, runtime_error) VALUES (?, ?, ?, ?, ?, ?, ?)')
+                ->execute($values);
+            $pdo->commit();
+            return true;
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $e;
+        }
+    }
+
+    private static function skippedRun(PDO $pdo, int $runId): array
+    {
+        $stmt = $pdo->prepare('SELECT verdict, score, pass_count, total_cases FROM judging_runs WHERE id = ?');
+        $stmt->execute([$runId]);
+        return array_merge($stmt->fetch() ?: ['verdict' => 'SYS_ERR', 'score' => 0], ['skipped' => true]);
     }
 
     // Kết quả của lần chấm cũ về sau KHÔNG ghi đè kết quả lần mới
@@ -455,32 +346,32 @@ final class JudgeEngine
             UPDATE submissions
             SET latest_run_id = :run_id, final_verdict = :verdict, final_score = :score,
                 pass_count = :pass_count, total_cases = :total_cases
-            WHERE id = :sub_id AND (latest_run_id IS NULL OR latest_run_id <= :run_id_check)
+            WHERE id = :sub_id AND latest_run_id = :run_id_check
+                AND EXISTS (SELECT 1 FROM judging_runs jr WHERE jr.id = :finished_run_id
+                    AND jr.submission_id = :finished_sub_id AND jr.status IN ('COMPLETED', 'SYS_ERROR')
+                    AND jr.verdict = :finished_verdict)
         ");
         $stmt->execute([
             ':run_id' => $runId, ':verdict' => $verdict, ':score' => $score,
             ':pass_count' => $passCount, ':total_cases' => $totalCases,
             ':sub_id' => $submissionId, ':run_id_check' => $runId,
+            ':finished_run_id' => $runId, ':finished_sub_id' => $submissionId, ':finished_verdict' => $verdict,
         ]);
         return $stmt->rowCount() > 0;
     }
 
-    private static function cleanupDir(string $dir): void
-    {
-        if (!is_dir($dir)) {
-            return;
-        }
-        foreach (scandir($dir) as $file) {
-            if ($file !== '.' && $file !== '..') {
-                @unlink($dir . DIRECTORY_SEPARATOR . $file);
-            }
-        }
-        @rmdir($dir);
-    }
-
-    // Cộng XP first-AC cho chủ bài nộp. Trả về số XP đã cộng (0 nếu đã từng AC bài này).
+    // Kept for old callers, but reading/backfilling a historical result must not
+    // mint an untracked reward. Only the private atomic finalization path can.
     public static function awardFirstSolveXp(PDO $pdo, int $submissionId): int
     {
+        return 0;
+    }
+
+    private static function awardActiveFirstSolveXp(PDO $pdo, int $submissionId, int $activeRunId): int
+    {
+        // Caller holds user -> submission -> RUNNING run locks and rolls this
+        // reward back if the conditional accepted final update does not succeed.
+        if (self::lockActiveRun($pdo, $submissionId, $activeRunId) === null) return 0;
         $stmt = $pdo->prepare("
             SELECT s.user_id, s.problem_id, p.difficulty
             FROM submissions s JOIN problems p ON p.id = s.problem_id
@@ -488,17 +379,22 @@ final class JudgeEngine
         ");
         $stmt->execute([$submissionId]);
         $sub = $stmt->fetch();
-        if (!$sub) {
-            return 0;
-        }
+        if (!$sub) return 0;
+        // Finalization's transaction starts with a locking user read, not a
+        // snapshot read. Its first consistent read is therefore after the previous
+        // reward committed. Do not lock other submissions/runs in this history
+        // query: retry holds those rows and may need an FK user lock of its own.
         $chk = $pdo->prepare("
-            SELECT COUNT(*) FROM submissions
-            WHERE user_id = ? AND problem_id = ? AND final_verdict = 'AC' AND id <> ?
+            SELECT s.id FROM submissions s
+            WHERE s.user_id = ? AND s.problem_id = ?
+                AND (s.final_verdict = 'AC' OR EXISTS (
+                    SELECT 1 FROM judging_runs jr WHERE jr.submission_id = s.id
+                        AND jr.status = 'COMPLETED' AND jr.verdict = 'AC'
+                ))
+            LIMIT 1
         ");
-        $chk->execute([$sub['user_id'], $sub['problem_id'], $submissionId]);
-        if ((int)$chk->fetchColumn() > 0) {
-            return 0; // đã từng AC bài này trước đó
-        }
+        $chk->execute([$sub['user_id'], $sub['problem_id']]);
+        if ($chk->fetchColumn() !== false) return 0;
         $xp = ['Easy' => 10, 'Medium' => 20, 'Hard' => 30][$sub['difficulty']] ?? 10;
         $pdo->prepare("UPDATE users SET xp_points = xp_points + ? WHERE id = ?")->execute([$xp, $sub['user_id']]);
         return $xp;

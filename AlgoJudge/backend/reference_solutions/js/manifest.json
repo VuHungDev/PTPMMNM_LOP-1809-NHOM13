@@ -1,0 +1,120 @@
+{
+  "language": "js",
+  "programs": [
+    {
+      "slug": "js-hello-repeat",
+      "title": "JS01: Lặp lời chào",
+      "correct": "js/js-hello-repeat/AC/solution.js",
+      "wrong": "js/js-hello-repeat/WA/solution.js",
+      "counterexample": {
+        "stdin": "1\n",
+        "expected_stdout": "Hello, JS!\n",
+        "explanation": "Vòng lặp dùng i <= N khi bắt đầu từ 0 nên chạy N + 1 lần. Với N = 1, mã sai in hai dòng Hello, JS! thay vì một dòng."
+      }
+    },
+    {
+      "slug": "js-fizzbuzz-lite",
+      "title": "JS02: FizzBuzz rút gọn",
+      "correct": "js/js-fizzbuzz-lite/AC/solution.js",
+      "wrong": "js/js-fizzbuzz-lite/WA/solution.js",
+      "counterexample": {
+        "stdin": "15\n",
+        "expected_stdout": "1\n2\nFizz\n4\nBuzz\nFizz\n7\n8\nFizz\nBuzz\n11\nFizz\n13\n14\nFizzBuzz\n",
+        "explanation": "Mã sai xét chia hết cho 3 trước mà không xét bội chung của 3 và 5. Với N = 15, dòng cuối bị in Fizz thay vì FizzBuzz."
+      }
+    },
+    {
+      "slug": "js-array-sum",
+      "title": "JS03: Tổng mảng",
+      "correct": "js/js-array-sum/AC/solution.js",
+      "wrong": "js/js-array-sum/WA/solution.js",
+      "counterexample": {
+        "stdin": "3\n1 2 3\n",
+        "expected_stdout": "6\n",
+        "explanation": "Vòng lặp sai chỉ duyệt N - 1 phần tử nên bỏ số cuối. Mảng 1, 2, 3 có tổng 6 nhưng mã sai chỉ cộng 1 + 2 và in 3."
+      }
+    },
+    {
+      "slug": "js-vowel-count",
+      "title": "JS04: Đếm nguyên âm",
+      "correct": "js/js-vowel-count/AC/solution.js",
+      "wrong": "js/js-vowel-count/WA/solution.js",
+      "counterexample": {
+        "stdin": "AEIOU\n",
+        "expected_stdout": "5\n",
+        "explanation": "Mã sai chỉ tìm nguyên âm chữ thường nên bỏ toàn bộ năm nguyên âm trong AEIOU và in 0, trái yêu cầu không phân biệt hoa thường."
+      }
+    },
+    {
+      "slug": "js-max-min",
+      "title": "JS05: Min Max",
+      "correct": "js/js-max-min/AC/solution.js",
+      "wrong": "js/js-max-min/WA/solution.js",
+      "counterexample": {
+        "stdin": "2\n5 9\n",
+        "expected_stdout": "5 9\n",
+        "explanation": "Khởi tạo min và max bằng 0 làm thêm một giá trị không thuộc mảng. Với mảng 5, 9, min sai vẫn là 0 nên mã sai in 0 9 thay vì 5 9."
+      }
+    },
+    {
+      "slug": "js-two-sum",
+      "title": "JS06: Two Sum",
+      "correct": "js/js-two-sum/AC/solution.js",
+      "wrong": "js/js-two-sum/WA/solution.js",
+      "counterexample": {
+        "stdin": "3 6\n3 2 4\n",
+        "expected_stdout": "1 2\n",
+        "explanation": "Mã sai lưu phần tử trước khi tra số bù nên dùng a[0] = 3 hai lần và in 0 0, vi phạm i < j. Đáp án duy nhất của mảng này là 1 2 vì 2 + 4 = 6."
+      }
+    },
+    {
+      "slug": "js-unique-sorted",
+      "title": "JS07: Loại trùng + sắp xếp",
+      "correct": "js/js-unique-sorted/AC/solution.js",
+      "wrong": "js/js-unique-sorted/WA/solution.js",
+      "counterexample": {
+        "stdin": "3\n2 10 2\n",
+        "expected_stdout": "2 10\n",
+        "explanation": "sort() không có comparator sắp theo chuỗi. Sau loại trùng, mã sai xếp 10 trước 2 và in 10 2; thứ tự số tăng dần đúng phải là 2 10."
+      }
+    },
+    {
+      "slug": "js-palindrome-str",
+      "title": "JS08: Chuỗi đối xứng",
+      "correct": "js/js-palindrome-str/AC/solution.js",
+      "wrong": "js/js-palindrome-str/WA/solution.js",
+      "counterexample": {
+        "stdin": "Aa\n",
+        "expected_stdout": "NO\n",
+        "explanation": "Mã sai chuyển thành chữ thường trước khi so sánh nên biến Aa thành aa rồi in YES. Theo yêu cầu phân biệt hoa thường, A khác a và kết quả đúng là NO."
+      }
+    },
+    {
+      "slug": "js-climb-stairs",
+      "title": "JS09: Bậc thang",
+      "correct": "js/js-climb-stairs/AC/solution.js",
+      "wrong": "js/js-climb-stairs/WA/solution.js",
+      "counterexample": {
+        "stdin": "2\n",
+        "expected_stdout": "2\n",
+        "explanation": "Mã sai đặt số cách ở bậc 0 bằng 0 thay vì 1 nên trả Fibonacci(N). Với N = 2, có hai cách 1+1 và 2 nhưng mã sai chỉ in 1."
+      }
+    },
+    {
+      "slug": "js-missing-number",
+      "title": "JS10: Số còn thiếu",
+      "correct": "js/js-missing-number/AC/solution.js",
+      "wrong": "js/js-missing-number/WA/solution.js",
+      "counterexample": {
+        "stdin": "5\n1 2 4 5\n",
+        "expected_stdout": "3\n",
+        "explanation": "Mã sai dùng N*(N-1)/2 là tổng 0..N-1, thiếu N so với tổng 1..N. Với N = 5 và các số 1, 2, 4, 5, mã sai in -2 thay vì số thiếu 3."
+      }
+    }
+  ],
+  "diagnostics": {
+    "CE": "js/_diagnostics/CE/solution.js",
+    "RE": "js/_diagnostics/RE/solution.js",
+    "TLE": "js/_diagnostics/TLE/solution.js"
+  }
+}

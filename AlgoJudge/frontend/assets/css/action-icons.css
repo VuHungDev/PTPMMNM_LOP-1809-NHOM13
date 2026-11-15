@@ -1,0 +1,87 @@
+/* Shared action controls: labelled SVGs with body-level, keyboard-accessible tooltips. */
+.aj-icon-definitions { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
+.aj-action-group { display: inline-flex; align-items: center; justify-content: flex-end; flex-wrap: nowrap; gap: 6px; vertical-align: middle; white-space: nowrap; }
+.aj-action-group > form { display: inline-flex; margin: 0; }
+.aj-icon-action,
+button.aj-icon-action,
+a.aj-icon-action {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+    min-height: 38px;
+    padding: 8px;
+    border: 1px solid var(--cl-border, #e2e8f0);
+    border-radius: 8px;
+    background: var(--cl-card, #fff);
+    color: var(--cl-text, #1e293b);
+    font: inherit;
+    line-height: 1;
+    text-decoration: none;
+    cursor: pointer;
+    vertical-align: middle;
+    transition: background-color .15s, color .15s, border-color .15s;
+}
+.aj-icon-action[hidden] { display: none; }
+.aj-icon-action.aj-icon-action--view,
+.aj-icon-action.aj-icon-action--show { color: #0369a1; }
+.aj-icon-action.aj-icon-action--hide { color: #475569; }
+.aj-icon-action.aj-icon-action--edit { color: var(--cl-primary, #2c31cf); }
+.aj-icon-action.aj-icon-action--lock,
+.aj-icon-action.aj-icon-action--unlock { color: #92400e; }
+.aj-icon-action.aj-icon-action--delete { color: #b91c1c; }
+.aj-icon-action:hover:not(:disabled) { background: var(--cl-control-hover, #eef2ff); border-color: currentColor; }
+.aj-icon-action:focus-visible,
+.aj-text-action:focus-visible { outline: 3px solid var(--cl-focus, #2c31cf); outline-offset: 3px; }
+.aj-icon-action:disabled { opacity: .45; cursor: not-allowed; }
+.aj-action-icon { display: block; width: 20px; height: 20px; flex: 0 0 20px; pointer-events: none; }
+.aj-text-action,
+button.aj-text-action {
+    display: inline;
+    padding: 4px 0;
+    margin: 6px 0 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--cl-primary, #2c31cf);
+    font: inherit;
+    font-size: .8rem;
+    font-weight: 500;
+    line-height: 1.5;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    cursor: pointer;
+}
+.aj-text-action:hover { color: var(--cl-primary-hover, #1e22a8); }
+.aj-action-tooltip {
+    position: fixed;
+    z-index: 10000;
+    max-width: min(280px, calc(100vw - 16px));
+    padding: 7px 10px;
+    border-radius: 6px;
+    background: #16213b;
+    color: #fff;
+    box-shadow: 0 4px 14px #0f172a24;
+    font: 500 12px/1.5 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    overflow-wrap: anywhere;
+    pointer-events: auto;
+}
+.aj-action-tooltip[hidden] { display: none; }
+.workspace-ide .aj-icon-action,
+.aj-icon-action.aj-icon-action--dark {
+    border-color: #45475a;
+    background: #262638;
+    color: #cdd6f4;
+}
+.workspace-ide .aj-icon-action:hover:not(:disabled),
+.aj-icon-action.aj-icon-action--dark:hover:not(:disabled) { background: #343449; }
+.workspace-ide .aj-icon-action--delete,
+.aj-icon-action.aj-icon-action--dark.aj-icon-action--delete { color: #fda4af; }
+@media (pointer: coarse) {
+    .aj-icon-action, button.aj-icon-action, a.aj-icon-action { width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) { .aj-icon-action { transition: none; } }

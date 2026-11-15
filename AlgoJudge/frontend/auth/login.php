@@ -31,16 +31,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 $pageTitle = 'Đăng nhập';
+$pageStyles = ['/frontend/assets/css/auth-login.css?v=20261114-4'];
+$pageScripts = '<script src="' . e(url('/frontend/assets/js/pages/auth-login.js?v=20261114-3')) . '" defer></script>';
 require FE_DIR . '/partials/layout_head.php';
 ?>
-<div class="auth-page">
+<div class="auth-page auth-page--animated">
     <div class="auth-banner">
         <div class="cl-brand" style="font-size:1.6rem;"><?php $logoSize = 44; require FE_DIR . '/partials/logo.php'; ?></div>
-        <div>
-            <h1 style="font-size:2rem; margin-bottom:12px;">Luyện tập &amp; Chấm bài tự động</h1>
-            <p style="opacity:0.85;">6 ngôn ngữ C / C++ / Java / Python / PHP / JS — chạy trên cả Windows &amp; Linux.</p>
+        <div class="auth-banner__content">
+            <div class="auth-banner__copy">
+                <h1>Luyện tập &amp; Chấm bài tự động</h1>
+                <p>6 ngôn ngữ C / C++ / Java / Python / PHP / JS </p>
+            </div>
+            <?php require FE_DIR . '/partials/auth_banner_scene.php'; ?>
         </div>
-        <div style="opacity:0.7; font-size:0.85rem;">Tài khoản demo (mật khẩu 123456): sv_son · sv_phuong · gv_cntt · admin</div>
     </div>
     <div class="auth-form-wrap">
         <div class="auth-card">

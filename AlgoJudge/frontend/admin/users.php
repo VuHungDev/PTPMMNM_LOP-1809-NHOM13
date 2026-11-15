@@ -28,22 +28,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new DomainException('Thao tác hoặc tài khoản không hợp lệ.');
         }
         if ($targetId === (int)$user['id']) {
-            throw new DomainException('Không thể đổi vai trò, khóa, xóa hoặc reset chính tài khoản quản trị đang đăng nhập. Nếu cần đặt lại mật khẩu, hãy nhờ quản trị viên khác hoặc dùng chức năng Quên mật khẩu.');
+            throw new DomainException('Không thể đổi vai trò, khóa, xóa hoặc đặt lại mật khẩu chính tài khoản quản trị đang đăng nhập. Admin chính cần được khôi phục qua người quản lý máy chủ, không qua admin phụ.');
         }
         $newRole = $text($_POST, 'role');
         if ($action === 'set_role' && !in_array($newRole, ['student', 'teacher', 'admin'], true)) {
             throw new DomainException('Vai trò không hợp lệ.');
         }
-        $hash = null;
-        if ($action === 'reset_pwd') {
-            $password = is_string($_POST['new_password'] ?? null) ? $_POST['new_password'] : '';
-            if (strlen($password) < 8 || strlen($password) > 72 || strpos($password, "\0") !== false) {
-                throw new DomainException('Mật khẩu mới phải có từ 8 đến 72 byte. Không dùng mật khẩu mặc định chung.');
-            }
-            $hash = password_hash($password, PASSWORD_DEFAULT);
-            unset($password);
-        }
-
         if ($pdo->inTransaction()) throw new LogicException('Account mutation requires its own transaction.');
         $pdo->beginTransaction();
         $ownsTransaction = true;
@@ -62,6 +52,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new DomainException('Quyền tài khoản đã thay đổi. Hãy đăng nhập lại.');
         }
         if (!$target) throw new DomainException('Tài khoản không còn tồn tại.');
+        // Authorize against locked live rows, not controls/POST flags or stale session roles.
+        AdminPolicy::assertCanManageAccount($actor, $target);
+        if ($action === 'set_role') AdminPolicy::assertCanAssignRole($actor, $newRole);
         $credentialsChanged = false;
         $auditAction = null;
         $auditMetadata = ['source' => 'ui'];
@@ -85,10 +78,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $msg = "Đã đổi vai trò tài khoản #$targetId thành $newRole, thu hồi mọi tư cách thành viên/yêu cầu đang chờ và phiên đăng nhập cũ. Lịch sử vẫn được giữ lại.";
             }
         } elseif ($action === 'reset_pwd') {
+            $hash = password_hash('123456', PASSWORD_DEFAULT);
             $pdo->prepare('UPDATE users SET password_hash = ?, auth_version = auth_version + 1 WHERE id = ?')->execute([$hash, $targetId]);
             $credentialsChanged = true;
             $auditAction = 'user.password_reset';
-            $msg = "Đã đặt mật khẩu mới cho tài khoản #$targetId. Các phiên đăng nhập và mã khôi phục cũ đã bị thu hồi.";
+            $msg = "Đã đặt lại mật khẩu tài khoản #$targetId thành 123456. Các phiên đăng nhập và mã khôi phục cũ đã bị thu hồi. Khuyến nghị đổi mật khẩu ngay sau khi đăng nhập.";
         } elseif ($action === 'toggle_lock') {
             $newActive = (int)$target['is_active'] === 1 ? 0 : 1;
             $pdo->prepare('UPDATE users SET is_active = ?, auth_version = auth_version + 1 WHERE id = ?')->execute([$newActive, $targetId]);
@@ -174,7 +168,6 @@ require FE_DIR . '/partials/layout_head.php';
             <a class="btn btn-primary" href="<?= e(url('/frontend/admin/user_form.php?' . http_build_query($returnQuery))) ?>">+ Tạo tài khoản</a>
         </div>
     </div>
-    <p style="color:var(--cl-muted); margin-bottom:12px;">3 vai trò: <code>student</code> (học viên) · <code>teacher</code> (giảng viên, quản lý lớp được giao) · <code>admin</code> (toàn quyền).</p>
     <p style="color:var(--cl-muted); margin-bottom:20px;">Đổi vai trò thu hồi mọi tư cách thành viên/yêu cầu đang chờ, mã khôi phục và phiên đăng nhập cũ. Giáo viên đang chủ quản lớp phải được gán lại lớp trước khi đổi sang vai trò khác.</p>
     <?php if ($flash): ?>
         <div role="status" style="background:<?= $flash['ok'] ? '#dcfce7; color:#15803d' : '#fee2e2; color:#b91c1c' ?>; padding:12px 18px; border-radius:8px; margin-bottom:20px; font-weight:600;"><?= e($flash['message']) ?></div>
@@ -196,16 +189,23 @@ require FE_DIR . '/partials/layout_head.php';
                     <th style="padding:10px;">ID</th><th style="padding:10px;">Username / Họ tên</th><th style="padding:10px;">Vai trò</th><th style="padding:10px;">Lớp</th><th style="padding:10px;">Bài nộp</th><th style="padding:10px;">Trạng thái</th><th style="padding:10px; text-align:right;">Thao tác</th>
                 </tr></thead>
                 <tbody>
-                <?php foreach ($users as $u): $isSelf = (int)$u['id'] === (int)$user['id']; $locked = (int)$u['is_active'] === 0; ?>
+                <?php foreach ($users as $u):
+                    $isSelf = (int)$u['id'] === (int)$user['id'];
+                    $locked = (int)$u['is_active'] === 0;
+                    $isPrimary = (int)$u['id'] === AdminPolicy::primaryId();
+                    $canManage = AdminPolicy::canManageAccount($user, $u);
+                ?>
                     <tr style="border-bottom:1px solid var(--cl-border);">
                         <td style="padding:10px; font-weight:700;">#<?= (int)$u['id'] ?></td>
                         <td style="padding:10px;"><strong><?= e($u['username']) ?></strong><br><small><?= e($u['full_name']) ?></small></td>
                         <td style="padding:10px;">
-                            <?php if ($isSelf): ?><code><?= e($u['role']) ?></code> <small>(Bạn)</small><?php else: ?>
+                            <?php if (!$canManage): ?>
+                                <code><?= e($u['role']) ?></code> <small>(<?= $isPrimary ? 'Admin chính — được bảo vệ' : ($u['role'] === 'admin' ? 'Admin phụ' : 'Chỉ xem') ?><?= $isSelf ? ', Bạn' : '' ?>)</small>
+                            <?php else: ?>
                                 <form method="POST" action="<?= e($formUrl) ?>" style="display:flex; gap:6px;" onsubmit="return confirm('Lưu vai trò? Nếu vai trò thay đổi, tư cách thành viên, yêu cầu chờ và các phiên đăng nhập cũ sẽ bị thu hồi.');">
                                     <?= csrf_field() ?><input type="hidden" name="action" value="set_role"><input type="hidden" name="target_id" value="<?= (int)$u['id'] ?>">
                                     <select name="role" class="form-control" aria-label="Vai trò của <?= e($u['username']) ?>" style="padding:4px 8px; font-size:0.82rem;">
-                                        <?php foreach (['student', 'teacher', 'admin'] as $r): ?><option value="<?= $r ?>" <?= $u['role'] === $r ? 'selected' : '' ?>><?= $r ?></option><?php endforeach; ?>
+                                        <?php foreach (AdminPolicy::isPrimary($user) ? ['student', 'teacher', 'admin'] : ['student', 'teacher'] as $r): ?><option value="<?= $r ?>" <?= $u['role'] === $r ? 'selected' : '' ?>><?= $r === 'admin' ? 'admin (phụ)' : $r ?></option><?php endforeach; ?>
                                     </select>
                                     <button type="submit" class="btn btn-primary" style="padding:4px 10px; font-size:0.78rem;">Lưu</button>
                                 </form>
@@ -222,23 +222,27 @@ require FE_DIR . '/partials/layout_head.php';
                         <td style="padding:10px;"><?= (int)$u['sub_count'] ?></td>
                         <td style="padding:10px;"><span class="badge <?= $locked ? 'verdict-CE' : 'verdict-AC' ?>"><?= $locked ? 'Bị khóa' : 'Hoạt động' ?></span></td>
                         <td style="padding:10px; text-align:right;">
-                            <?php if ($isSelf): ?><a href="<?= e(url('/frontend/profile.php')) ?>">Hồ sơ quản trị</a><?php else: ?>
-                                <form method="POST" action="<?= e($formUrl) ?>" style="display:inline;" onsubmit="return confirm('<?= $locked ? 'Mở khóa' : 'Khóa' ?> tài khoản này? Các phiên đăng nhập và mã khôi phục cũ sẽ bị thu hồi.');">
-                                    <?= csrf_field() ?><input type="hidden" name="action" value="toggle_lock"><input type="hidden" name="target_id" value="<?= (int)$u['id'] ?>">
-                                    <button type="submit" class="btn" style="background:#fef3c7; padding:4px 10px; font-size:0.78rem;"><?= $locked ? 'Mở khóa' : 'Khóa' ?></button>
-                                </form>
-                                <form method="POST" action="<?= e($formUrl) ?>" style="display:inline;" onsubmit="return confirm('Xóa tài khoản chưa có dữ liệu liên quan? Nếu cần giữ lịch sử, hãy khóa thay vì xóa.');">
-                                    <?= csrf_field() ?><input type="hidden" name="action" value="delete_user"><input type="hidden" name="target_id" value="<?= (int)$u['id'] ?>">
-                                    <button type="submit" class="btn" style="background:#fee2e2; color:#b91c1c; padding:4px 10px; font-size:0.78rem;">Xóa</button>
-                                </form>
-                                <details style="margin-top:8px; text-align:left; min-width:180px;">
-                                    <summary style="cursor:pointer;">Đặt mật khẩu mới</summary>
-                                    <form method="POST" action="<?= e($formUrl) ?>" style="margin-top:8px;" onsubmit="return confirm('Đặt mật khẩu mới và thu hồi mọi phiên đăng nhập/mã khôi phục cũ của tài khoản này?');">
-                                        <?= csrf_field() ?><input type="hidden" name="action" value="reset_pwd"><input type="hidden" name="target_id" value="<?= (int)$u['id'] ?>">
-                                        <input type="password" name="new_password" class="form-control" required minlength="8" maxlength="72" autocomplete="new-password" aria-label="Mật khẩu mới của <?= e($u['username']) ?>" placeholder="Mật khẩu mới (8–72 byte)" style="margin-bottom:6px;">
-                                        <button type="submit" class="btn btn-primary" style="padding:4px 10px; font-size:0.78rem;">Đặt mật khẩu</button>
+                            <div class="aj-action-group">
+                                <a class="aj-icon-action aj-icon-action--view" href="<?= e(url('/frontend/admin/user_view.php?' . http_build_query(['id' => (int)$u['id']] + $returnQuery))) ?>" aria-label="Xem" data-action-label="Xem" title="Xem"><?= aj_action_icon('view') ?></a>
+                                <?php if ($canManage): ?>
+                                    <a class="aj-icon-action aj-icon-action--edit" href="<?= e(url('/frontend/admin/user_edit.php?' . http_build_query(['id' => (int)$u['id']] + $returnQuery))) ?>" aria-label="Sửa" data-action-label="Sửa" title="Sửa"><?= aj_action_icon('edit') ?></a>
+                                    <form method="POST" action="<?= e($formUrl) ?>" onsubmit="return confirm('<?= $locked ? 'Mở khóa' : 'Khóa' ?> tài khoản này? Các phiên đăng nhập và mã khôi phục cũ sẽ bị thu hồi.');">
+                                        <?= csrf_field() ?><input type="hidden" name="action" value="toggle_lock"><input type="hidden" name="target_id" value="<?= (int)$u['id'] ?>">
+                                        <button type="submit" class="aj-icon-action aj-icon-action--<?= $locked ? 'unlock' : 'lock' ?>" aria-label="<?= $locked ? 'Mở khóa' : 'Khóa' ?>" data-action-label="<?= $locked ? 'Mở khóa' : 'Khóa' ?>" title="<?= $locked ? 'Mở khóa' : 'Khóa' ?>"><?= aj_action_icon($locked ? 'unlock' : 'lock') ?></button>
                                     </form>
-                                </details>
+                                    <form method="POST" action="<?= e($formUrl) ?>" onsubmit="return confirm('Xóa tài khoản chưa có dữ liệu liên quan? Nếu cần giữ lịch sử, hãy khóa thay vì xóa.');">
+                                        <?= csrf_field() ?><input type="hidden" name="action" value="delete_user"><input type="hidden" name="target_id" value="<?= (int)$u['id'] ?>">
+                                        <button type="submit" class="aj-icon-action aj-icon-action--delete" aria-label="Xóa" data-action-label="Xóa" title="Xóa"><?= aj_action_icon('delete') ?></button>
+                                    </form>
+                                <?php endif; ?>
+                            </div>
+                            <?php if ($isSelf): ?><div style="margin-top:6px;"><a href="<?= e(url('/frontend/profile.php')) ?>">Hồ sơ quản trị</a></div>
+                            <?php elseif (!$canManage): ?><small style="display:block; margin-top:6px; color:var(--cl-muted);"><?= $isPrimary ? 'Admin chính được bảo vệ' : 'Chỉ admin chính được quản lý' ?></small>
+                            <?php else: ?>
+                                <form method="POST" action="<?= e($formUrl) ?>" style="margin:0;" onsubmit="return confirm('Đặt lại mật khẩu tài khoản này thành 123456 và thu hồi mọi phiên đăng nhập/mã khôi phục (OTP) cũ?');">
+                                    <?= csrf_field() ?><input type="hidden" name="action" value="reset_pwd"><input type="hidden" name="target_id" value="<?= (int)$u['id'] ?>">
+                                    <button type="submit" class="aj-text-action">Đặt lại mật khẩu</button>
+                                </form>
                             <?php endif; ?>
                         </td>
                     </tr>

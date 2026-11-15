@@ -174,11 +174,10 @@ $ecases = $editing['cases'] ?? [['stdin_data' => '', 'expected_output' => '', 'i
 ?>
 <div style="max-width:760px; margin:28px auto; padding:0 24px;">
     <h2 style="margin-bottom:4px;"><?= $isEdit ? 'Sửa bài tập #' . (int)$editing['id'] : 'Tạo bài tập mới' ?></h2>
-    <p style="color:var(--cl-muted); margin:0 0 8px;">Chỉ 3 bước — mất khoảng 2 phút.</p>
     <p style="margin-bottom:16px;"><a class="btn btn-secondary btn-back" href="<?= url('/frontend/instructor/problems.php') ?>">← Về danh sách bài tập</a></p>
 
     <?php if ($err): ?><div style="background:#fee2e2; color:#b91c1c; padding:12px 18px; border-radius:8px; margin-bottom:16px; font-weight:600;">✘ <?= e($err) ?></div><?php endif; ?>
-    <div id="pf-draft-note" hidden style="background:#fef9c3; color:#854d0e; padding:10px 16px; border-radius:8px; margin-bottom:12px; font-size:0.85rem;">Đã khôi phục bản nháp bạn đang nhập dở. <button type="button" id="pf-draft-clear" style="text-decoration:underline; background:none; border:none; cursor:pointer; color:inherit; font-size:inherit;">Xóa nháp</button></div>
+    <div id="pf-draft-note" hidden style="background:#fef9c3; color:#854d0e; padding:10px 16px; border-radius:8px; margin-bottom:12px; font-size:0.85rem;">Đã khôi phục bản nháp bạn đang nhập dở. <button type="button" id="pf-draft-clear" class="aj-icon-action aj-icon-action--delete" aria-label="Xóa nháp" data-action-label="Xóa nháp" title="Xóa nháp"><?= aj_action_icon('delete') ?></button></div>
 
     <!-- Thanh tiến trình -->
     <ol id="pf-steps" style="display:flex; gap:8px; list-style:none; padding:0; margin:0 0 16px;">
@@ -246,7 +245,7 @@ $ecases = $editing['cases'] ?? [['stdin_data' => '', 'expected_output' => '', 'i
                     <div class="case-row" style="border:1px solid var(--cl-border); border-radius:8px; padding:10px; margin:8px 0;">
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
                             <b style="font-size:0.85rem;">Test #<span class="case-no"><?= $i + 1 ?></span></b>
-                            <button type="button" class="btn case-del" style="background:#fee2e2; padding:2px 10px; font-size:0.8rem;">Xóa</button>
+                            <button type="button" class="case-del aj-icon-action aj-icon-action--delete" aria-label="Xóa" data-action-label="Xóa" title="Xóa"><?= aj_action_icon('delete') ?></button>
                         </div>
                         <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
                             <textarea name="test_stdin[]" class="form-control" rows="2" placeholder="Input (stdin)"><?= e($c['stdin_data']) ?></textarea>
@@ -357,11 +356,13 @@ $ecases = $editing['cases'] ?? [['stdin_data' => '', 'expected_output' => '', 'i
         });
     }
     list.addEventListener('click', e => {
-        if (e.target.classList.contains('case-del')) {
-            if (list.querySelectorAll('.case-row').length <= 1) { alert('Cần ít nhất 1 test case.'); return; }
-            e.target.closest('.case-row').remove();
-            renumber();
-        }
+        const button = e.target.closest?.('.case-del');
+        if (!button || !list.contains(button)) return;
+        const row = button.closest('.case-row');
+        if (!row || !list.contains(row)) return;
+        if (list.querySelectorAll('.case-row').length <= 1) { alert('Cần ít nhất 1 test case.'); return; }
+        row.remove();
+        renumber();
     });
     document.getElementById('pf-add-case').onclick = () => {
         const div = document.createElement('div');
@@ -369,7 +370,7 @@ $ecases = $editing['cases'] ?? [['stdin_data' => '', 'expected_output' => '', 'i
         div.style.cssText = 'border:1px solid var(--cl-border); border-radius:8px; padding:10px; margin:8px 0;';
         div.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
                 <b style="font-size:0.85rem;">Test #<span class="case-no"></span></b>
-                <button type="button" class="btn case-del" style="background:#fee2e2; padding:2px 10px; font-size:0.8rem;">Xóa</button></div>
+                <button type="button" class="case-del aj-icon-action aj-icon-action--delete" aria-label="Xóa" data-action-label="Xóa" title="Xóa"><?= aj_action_icon('delete') ?></button></div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
                 <textarea name="test_stdin[]" class="form-control" rows="2" placeholder="Input (stdin)"></textarea>
                 <textarea name="test_expected[]" class="form-control" rows="2" placeholder="Output mong đợi"></textarea></div>

@@ -2,6 +2,8 @@
 require_once __DIR__ . '/../../backend/lib/Auth.php';
 require_once __DIR__ . '/../../backend/lib/ClassManager.php';
 $user = Auth::requireRole(['student', 'teacher', 'admin']);
+// Rosters and invitations must not remain cached after ownership/membership is revoked.
+header('Cache-Control: private, no-store');
 $role = $user['role'];
 $text = static function (array $input, string $key): string {
     return is_string($input[$key] ?? null) ? trim($input[$key]) : '';
@@ -14,8 +16,6 @@ $page = max(1, $integer($_GET, 'page', 1));
 $selectedClassId = max(0, $integer($_GET, 'class_id'));
 $studentView = $role === 'student' && in_array($text($_GET, 'view'), ['join', 'requests'], true) ? $text($_GET, 'view') : '';
 if ($role === 'student') {
-    // Do not retain a private roster in browser caches after membership is removed.
-    header('Cache-Control: private, no-store');
     if (array_key_exists('class_id', $_GET) && !$selectedClassId) {
         http_response_code(404);
         die('Lớp không tồn tại hoặc bạn không còn là thành viên của lớp.');
@@ -61,8 +61,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $msg = 'Đã tạo lớp. Chia sẻ mã mời bên dưới để học viên gửi yêu cầu tham gia.';
                 break;
             case 'assign_owner':
-                ClassManager::assignOwner($user, $classId, $integer($_POST, 'owner_teacher_id'));
-                $msg = 'Đã lưu giáo viên chủ quản. Mã mời được giữ nguyên nếu đã kích hoạt.';
+                ClassManager::assignOwner($user, $classId, $integer($_POST, 'owner_teacher_id'), $text($_POST, 'expected_owner_state'));
+                $msg = 'Đã lưu giáo viên chủ quản. Mã mời được giữ nguyên nếu đã kích hoạt; gán lại sau thu hồi sẽ tạo mã mời mới.';
+                break;
+            case 'revoke_owner':
+                ClassManager::revokeOwner($user, $classId, $integer($_POST, 'expected_owner_id', -1), $text($_POST, 'expected_owner_state'));
+                $msg = 'Đã thu hồi chủ quản và vô hiệu hóa mã mời. Thành viên, yêu cầu tham gia và toàn bộ lịch sử học tập được giữ nguyên.';
                 break;
             case 'activate_code':
             case 'rotate_code':
@@ -99,6 +103,13 @@ $perPage = 20;
 $classes = $members = $myMemberships = [];
 $selectedClass = null;
 $params = [];
+// Reuse this live predicate for every staff roster read, not just the first access check.
+$managedClassSql = 'c.id = ?';
+$managedClassParams = [$selectedClassId];
+if ($role === 'teacher') {
+    $managedClassSql .= ' AND c.owner_teacher_id = ?';
+    $managedClassParams[] = (int)$user['id'];
+}
 if ($role === 'student') {
     if ($selectedClassId) {
         $joinedClass = ClassManager::getJoinedClass($user, $selectedClassId, $page, $perPage);
@@ -124,8 +135,8 @@ if ($role === 'student') {
         http_response_code($role === 'teacher' ? 403 : 404);
         die('Lớp không tồn tại hoặc bạn không quản lý lớp này.');
     }
-    $stmt = $pdo->prepare('SELECT COUNT(*) FROM class_members WHERE class_id = ?');
-    $stmt->execute([$selectedClassId]);
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE ' . $managedClassSql);
+    $stmt->execute($managedClassParams);
     $totalRows = (int)$stmt->fetchColumn();
 } else {
     $where = [];
@@ -169,9 +180,16 @@ if ($role === 'student') {
         $myMemberships = $stmt->fetchAll();
     }
 } elseif ($selectedClass) {
-    $stmt = $pdo->prepare("SELECT cm.status, cm.requested_at, cm.updated_at, u.id, u.username, u.full_name, u.email, u.role, u.is_active FROM class_members cm JOIN users u ON u.id = cm.user_id WHERE cm.class_id = ? ORDER BY FIELD(cm.status, 'pending', 'active', 'rejected', 'removed'), u.username, u.id LIMIT " . $perPage . ' OFFSET ' . $offset);
-    $stmt->execute([$selectedClassId]);
+    $stmt = $pdo->prepare("SELECT cm.status, cm.requested_at, cm.updated_at, u.id, u.username, u.full_name, u.email, u.role, u.is_active FROM class_members cm JOIN classes c ON c.id = cm.class_id JOIN users u ON u.id = cm.user_id WHERE " . $managedClassSql . " ORDER BY FIELD(cm.status, 'pending', 'active', 'rejected', 'removed'), u.username, u.id LIMIT " . $perPage . ' OFFSET ' . $offset);
+    $stmt->execute($managedClassParams);
     $members = $stmt->fetchAll();
+    // Revocation can commit between the earlier check and these reads. Discard the
+    // response if access changed, and never render the previously-read invitation.
+    $selectedClass = ClassManager::getManagedClass($user, $selectedClassId);
+    if (!$selectedClass) {
+        http_response_code($role === 'teacher' ? 403 : 404);
+        die('Lớp không tồn tại hoặc bạn không quản lý lớp này.');
+    }
     $baseQuery = array_merge($context, ['class_id' => $selectedClassId, 'list_page' => $listPage]);
 } else {
     $listPage = $page;
@@ -358,9 +376,9 @@ require FE_DIR . '/partials/layout_head.php';
             <?php if ($role === 'admin'): ?>
                 <div style="background:#fff; padding:20px; border-radius:12px; margin-bottom:18px;">
                     <h3>Giáo viên chủ quản</h3>
-                    <p>Chủ quản hiện tại: <?= e($selectedClass['owner_name'] ?: 'Chưa gán') ?>. Đổi chủ quản sẽ chuyển quyền quản lý lớp, không xóa thành viên.</p>
+                    <p>Chủ quản hiện tại: <?= e($selectedClass['owner_name'] ?: 'Chưa gán') ?>. Đổi chủ quản sẽ chuyển quyền quản lý lớp, không xóa thành viên hoặc yêu cầu tham gia. Gán lại sau thu hồi sẽ tạo mã mời mới.</p>
                     <form method="POST" action="<?= e($formUrl) ?>" style="display:flex; gap:8px; flex-wrap:wrap;">
-                        <?= csrf_field() ?><input type="hidden" name="action" value="assign_owner"><input type="hidden" name="class_id" value="<?= $selectedClassId ?>">
+                        <?= csrf_field() ?><input type="hidden" name="action" value="assign_owner"><input type="hidden" name="class_id" value="<?= $selectedClassId ?>"><input type="hidden" name="expected_owner_state" value="<?= e(ClassManager::ownerStateToken($selectedClass)) ?>">
                         <select name="owner_teacher_id" class="form-control" required aria-label="Giáo viên chủ quản mới" style="max-width:360px;">
                             <option value="">Chọn giáo viên</option>
                             <?php foreach ($teachers as $teacher): if (!(int)$teacher['is_active']) continue; ?>
@@ -369,6 +387,13 @@ require FE_DIR . '/partials/layout_head.php';
                         </select>
                         <button class="btn btn-primary" type="submit">Lưu chủ quản</button>
                     </form>
+                    <?php if ($selectedClass['owner_teacher_id'] !== null || $selectedClass['join_code'] !== null): ?>
+                        <form method="POST" action="<?= e($formUrl) ?>" style="margin-top:14px;" onsubmit="return confirm('Thu hồi chủ quản lớp này và vô hiệu hóa mã mời? Giáo viên cũ sẽ mất quyền quản lý lớp. Thành viên, yêu cầu tham gia và lịch sử học tập vẫn được giữ nguyên.');">
+                            <?= csrf_field() ?><input type="hidden" name="action" value="revoke_owner"><input type="hidden" name="class_id" value="<?= $selectedClassId ?>"><input type="hidden" name="expected_owner_id" value="<?= (int)$selectedClass['owner_teacher_id'] ?>"><input type="hidden" name="expected_owner_state" value="<?= e(ClassManager::ownerStateToken($selectedClass)) ?>">
+                            <button class="btn" type="submit" style="color:#b91c1c;"><?= $selectedClass['owner_teacher_id'] !== null ? 'Thu hồi chủ quản' : 'Vô hiệu hóa mã mời cũ' ?></button>
+                        </form>
+                        <p class="class-muted">Thu hồi chỉ bỏ quyền chủ quản lớp này và vô hiệu hóa mã mời. Thành viên, yêu cầu và lịch sử học tập được giữ nguyên; quyền ở các lớp khác không bị thay đổi.</p>
+                    <?php endif; ?>
                 </div>
             <?php endif; ?>
             <div style="background:#fff; padding:20px; border-radius:12px;">
@@ -388,7 +413,7 @@ require FE_DIR . '/partials/layout_head.php';
                 <p style="color:var(--cl-muted);">Chỉ thêm tài khoản học viên đã đăng ký. Thêm trực tiếp sẽ duyệt ngay; trang này không tạo tài khoản hoặc sửa hồ sơ học viên.</p>
                 <form method="POST" action="<?= e($formUrl) ?>" style="display:flex; gap:8px; margin:14px 0; max-width:650px; flex-wrap:wrap;">
                     <?= csrf_field() ?><input type="hidden" name="action" value="add_student"><input type="hidden" name="class_id" value="<?= $selectedClassId ?>">
-                    <input class="form-control" name="identifier" required maxlength="100" value="<?= e($selectedStudentUsername) ?>" placeholder="Username hoặc email học viên đã đăng ký" aria-label="Username hoặc email học viên" style="flex:1 1 220px; min-width:0;">
+                    <input class="form-control" name="identifier" required maxlength="100" value="<?= e($selectedStudentUsername) ?>" placeholder="<?= $role === 'teacher' ? 'Email học viên đã đăng ký' : 'Username hoặc email học viên đã đăng ký' ?>" aria-label="<?= $role === 'teacher' ? 'Email học viên' : 'Username hoặc email học viên' ?>" style="flex:1 1 220px; min-width:0;">
                     <button class="btn btn-primary" type="submit">Thêm học viên</button>
                 </form>
                 <h4>Thành viên và yêu cầu (<?= $totalRows ?>)</h4>
@@ -399,7 +424,7 @@ require FE_DIR . '/partials/layout_head.php';
                         <tbody>
                         <?php foreach ($members as $member): ?>
                             <tr style="border-bottom:1px solid var(--cl-border);">
-                                <td data-label="Học viên" style="padding:9px;"><?= e($member['full_name']) ?> (<code><?= e($member['username']) ?></code>)<?php if ($member['role'] !== 'student'): ?><small style="display:block;">Đã chuyển vai trò: <?= e($member['role']) ?></small><?php endif; ?><?php if (!(int)$member['is_active']): ?><small style="display:block;">Tài khoản bị khóa</small><?php endif; ?></td>
+                                <td data-label="Học viên" style="padding:9px;"><?= e($member['full_name'] ?: 'Chưa cập nhật họ tên') ?><?php if ($role === 'admin'): ?> (<code><?= e($member['username']) ?></code>)<?php endif; ?><?php if ($member['role'] !== 'student'): ?><small style="display:block;">Đã chuyển vai trò: <?= e($member['role']) ?></small><?php endif; ?><?php if (!(int)$member['is_active']): ?><small style="display:block;">Tài khoản bị khóa</small><?php endif; ?></td>
                                 <td data-label="Email" style="padding:9px;"><?= e($member['email']) ?></td>
                                 <td data-label="Trạng thái / cập nhật" style="padding:9px;"><?= e($statusLabels[$member['status']] ?? $member['status']) ?><small style="display:block; color:var(--cl-muted);"><?= e($member['updated_at']) ?></small></td>
                                 <td data-label="Thao tác" style="padding:9px;"><div class="class-member-actions">

@@ -1,0 +1,120 @@
+{
+  "language": "cpp",
+  "programs": [
+    {
+      "slug": "cpp-sort-asc",
+      "title": "C++01: Sắp xếp tăng dần",
+      "correct": "cpp/cpp-sort-asc/AC/solution.cpp",
+      "wrong": "cpp/cpp-sort-asc/WA/solution.cpp",
+      "counterexample": {
+        "stdin": "3\n2 3 1\n",
+        "expected_stdout": "1 2 3\n",
+        "explanation": "WA dùng end() - 1 làm cận phải loại trừ của sort nên bỏ sót phần tử cuối. Với dãy 2 3 1, chương trình in 2 3 1 thay vì 1 2 3."
+      }
+    },
+    {
+      "slug": "cpp-string-len",
+      "title": "C++02: Độ dài từ dài nhất",
+      "correct": "cpp/cpp-string-len/AC/solution.cpp",
+      "wrong": "cpp/cpp-string-len/WA/solution.cpp",
+      "counterexample": {
+        "stdin": "longword hi\n",
+        "expected_stdout": "8\n",
+        "explanation": "WA ghi đè kết quả bằng độ dài từ đang đọc, không lấy giá trị lớn nhất. Từ longword dài 8 nhưng từ cuối hi dài 2 nên chương trình in 2 thay vì 8."
+      }
+    },
+    {
+      "slug": "cpp-second-max",
+      "title": "C++03: Lớn thứ hai",
+      "correct": "cpp/cpp-second-max/AC/solution.cpp",
+      "wrong": "cpp/cpp-second-max/WA/solution.cpp",
+      "counterexample": {
+        "stdin": "3\n-9 -3 -5\n",
+        "expected_stdout": "-5\n",
+        "explanation": "WA khởi tạo hai giá trị lớn nhất bằng 0 nên không cập nhật khi tất cả phần tử âm. Dãy gồm ba số phân biệt -9 -3 -5 có số lớn thứ hai là -5, nhưng WA in 0."
+      }
+    },
+    {
+      "slug": "cpp-sum-digits",
+      "title": "C++04: Tổng chữ số",
+      "correct": "cpp/cpp-sum-digits/AC/solution.cpp",
+      "wrong": "cpp/cpp-sum-digits/WA/solution.cpp",
+      "counterexample": {
+        "stdin": "-204\n",
+        "expected_stdout": "6\n",
+        "explanation": "WA chỉ tách chữ số khi N > 0 và quên xử lý dấu âm. Với -204, vòng lặp không chạy nên in 0 thay vì tổng chữ số 2 + 0 + 4 = 6."
+      }
+    },
+    {
+      "slug": "cpp-freq-char",
+      "title": "C++05: Ký tự xuất hiện nhiều nhất",
+      "correct": "cpp/cpp-freq-char/AC/solution.cpp",
+      "wrong": "cpp/cpp-freq-char/WA/solution.cpp",
+      "counterexample": {
+        "stdin": "aabb\n",
+        "expected_stdout": "a\n",
+        "explanation": "WA cập nhật ký tự tốt nhất cả khi tần suất bằng nhau trong lượt duyệt a đến z. Hai ký tự a và b cùng xuất hiện hai lần, nhưng WA chọn b thay vì ký tự nhỏ nhất a."
+      }
+    },
+    {
+      "slug": "cpp-two-sum-idx",
+      "title": "C++06: Two Sum (chỉ số)",
+      "correct": "cpp/cpp-two-sum-idx/AC/solution.cpp",
+      "wrong": "cpp/cpp-two-sum-idx/WA/solution.cpp",
+      "counterexample": {
+        "stdin": "3 6\n3 2 4\n",
+        "expected_stdout": "1 2\n",
+        "explanation": "Đầu vào có duy nhất cặp chỉ số hợp lệ 1 2 vì 2 + 4 = 6. WA đưa phần tử hiện tại vào map trước khi tìm phần bù, nên dùng chính số 3 ở vị trí 0 hai lần và in 0 0, vi phạm i < j."
+      }
+    },
+    {
+      "slug": "cpp-stack-check",
+      "title": "C++07: Ngoặc hợp lệ",
+      "correct": "cpp/cpp-stack-check/AC/solution.cpp",
+      "wrong": "cpp/cpp-stack-check/WA/solution.cpp",
+      "counterexample": {
+        "stdin": "([)]\n",
+        "expected_stdout": "NO\n",
+        "explanation": "WA chỉ kiểm tra số ngoặc mở bằng số ngoặc đóng cho từng loại, bỏ qua thứ tự lồng nhau. Chuỗi ([)] có đủ số lượng nhưng đóng sai thứ tự nên phải in NO; WA in YES."
+      }
+    },
+    {
+      "slug": "cpp-prefix-sum",
+      "title": "C++08: Tổng đoạn (prefix)",
+      "correct": "cpp/cpp-prefix-sum/AC/solution.cpp",
+      "wrong": "cpp/cpp-prefix-sum/WA/solution.cpp",
+      "counterexample": {
+        "stdin": "3 2\n2 4 8\n1 3\n2 2\n",
+        "expected_stdout": "14\n4\n",
+        "explanation": "WA dùng prefix[R] - prefix[L] thay vì prefix[R] - prefix[L - 1], làm mất phần tử tại đầu trái. Hai truy vấn [1,3] và [2,2] bị in thành 12 và 0 thay vì 14 và 4."
+      }
+    },
+    {
+      "slug": "cpp-unique-count",
+      "title": "C++09: Đếm phần tử phân biệt",
+      "correct": "cpp/cpp-unique-count/AC/solution.cpp",
+      "wrong": "cpp/cpp-unique-count/WA/solution.cpp",
+      "counterexample": {
+        "stdin": "3\n1 2 1\n",
+        "expected_stdout": "2\n",
+        "explanation": "WA đếm số đoạn gồm các giá trị bằng nhau liên tiếp nhưng chưa sắp xếp dãy. Với 1 2 1, số 1 bị đếm hai lần nên chương trình in 3 thay vì 2 giá trị phân biệt."
+      }
+    },
+    {
+      "slug": "cpp-gcd-lcm",
+      "title": "C++10: GCD và LCM",
+      "correct": "cpp/cpp-gcd-lcm/AC/solution.cpp",
+      "wrong": "cpp/cpp-gcd-lcm/WA/solution.cpp",
+      "counterexample": {
+        "stdin": "6 8\n",
+        "expected_stdout": "2\n24\n",
+        "explanation": "WA tính LCM bằng A * B và quên chia GCD. Với 6 và 8, GCD là 2, LCM là 24 nhưng chương trình in 48 ở dòng thứ hai."
+      }
+    }
+  ],
+  "diagnostics": {
+    "CE": "cpp/_diagnostics/CE/solution.cpp",
+    "RE": "cpp/_diagnostics/RE/solution.cpp",
+    "TLE": "cpp/_diagnostics/TLE/solution.cpp"
+  }
+}

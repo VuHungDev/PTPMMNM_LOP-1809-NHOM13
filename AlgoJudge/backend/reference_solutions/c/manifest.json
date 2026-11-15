@@ -1,0 +1,120 @@
+{
+  "language": "c",
+  "programs": [
+    {
+      "slug": "c-print-hello-n",
+      "title": "C01: In N dòng chào",
+      "correct": "c/c-print-hello-n/AC/solution.c",
+      "wrong": "c/c-print-hello-n/WA/solution.c",
+      "counterexample": {
+        "stdin": "2\n",
+        "expected_stdout": "Hello\nHello\n",
+        "explanation": "Vòng lặp dùng i <= N với i bắt đầu từ 0 nên chạy N+1 lần. Với N=2, bản WA in 3 dòng Hello thay vì 2 dòng."
+      }
+    },
+    {
+      "slug": "c-sum-1-to-n",
+      "title": "C02: Tổng 1 đến N",
+      "correct": "c/c-sum-1-to-n/AC/solution.c",
+      "wrong": "c/c-sum-1-to-n/WA/solution.c",
+      "counterexample": {
+        "stdin": "5\n",
+        "expected_stdout": "15\n",
+        "explanation": "Bản WA dùng N*(N-1)/2, tức tổng từ 1 đến N-1. Với N=5, mã in 10 thay vì 15 vì bỏ mất số hạng 5."
+      }
+    },
+    {
+      "slug": "c-abs-diff",
+      "title": "C03: Trị tuyệt đối hiệu",
+      "correct": "c/c-abs-diff/AC/solution.c",
+      "wrong": "c/c-abs-diff/WA/solution.c",
+      "counterexample": {
+        "stdin": "3 10\n",
+        "expected_stdout": "7\n",
+        "explanation": "Bản WA chỉ in A-B, quên lấy trị tuyệt đối. Với A=3 và B=10, mã in -7 thay vì 7."
+      }
+    },
+    {
+      "slug": "c-mult-table",
+      "title": "C04: Bảng cửu chương rút gọn",
+      "correct": "c/c-mult-table/AC/solution.c",
+      "wrong": "c/c-mult-table/WA/solution.c",
+      "counterexample": {
+        "stdin": "2\n",
+        "expected_stdout": "2 x 1 = 2\n2 x 2 = 4\n",
+        "explanation": "Bản WA duyệt i=0..N-1 thay vì i=1..N. Với N=2, mã in hai dòng '2 x 0 = 0' và '2 x 1 = 2', thừa dòng i=0 và thiếu dòng i=2."
+      }
+    },
+    {
+      "slug": "c-count-even",
+      "title": "C05: Đếm số chẵn",
+      "correct": "c/c-count-even/AC/solution.c",
+      "wrong": "c/c-count-even/WA/solution.c",
+      "counterexample": {
+        "stdin": "4\n-2 -3 0 1\n",
+        "expected_stdout": "2\n",
+        "explanation": "Bản WA yêu cầu giá trị phải dương mới đếm là chẵn. Hai số -2 và 0 đều chẵn nhưng bị bỏ qua nên mã in 0 thay vì 2."
+      }
+    },
+    {
+      "slug": "c-reverse-int",
+      "title": "C06: Đảo ngược số nguyên",
+      "correct": "c/c-reverse-int/AC/solution.c",
+      "wrong": "c/c-reverse-int/WA/solution.c",
+      "counterexample": {
+        "stdin": "-456\n",
+        "expected_stdout": "-654\n",
+        "explanation": "Bản WA đổi N về trị tuyệt đối để đảo chữ số nhưng quên khôi phục dấu âm. Với N=-456, mã in 654 thay vì -654."
+      }
+    },
+    {
+      "slug": "c-gcd-array",
+      "title": "C07: GCD của mảng",
+      "correct": "c/c-gcd-array/AC/solution.c",
+      "wrong": "c/c-gcd-array/WA/solution.c",
+      "counterexample": {
+        "stdin": "3\n12 18 24\n",
+        "expected_stdout": "6\n",
+        "explanation": "Bản WA khởi tạo kết quả GCD bằng 1 thay vì 0. Vì gcd(1,x)=1 với mọi số nguyên dương x, mã luôn giữ kết quả 1, trong khi GCD của 12, 18, 24 là 6."
+      }
+    },
+    {
+      "slug": "c-upper-lower",
+      "title": "C08: Đổi hoa-thường",
+      "correct": "c/c-upper-lower/AC/solution.c",
+      "wrong": "c/c-upper-lower/WA/solution.c",
+      "counterexample": {
+        "stdin": "Hello World\n",
+        "expected_stdout": "hELLO wORLD\n",
+        "explanation": "Bản WA chỉ chuyển chữ thường thành hoa, không chuyển chữ hoa thành thường. Vì vậy H và W không được đổi, kết quả là 'HELLO WORLD' thay vì 'hELLO wORLD'."
+      }
+    },
+    {
+      "slug": "c-prime-range",
+      "title": "C09: Liệt kê số nguyên tố",
+      "correct": "c/c-prime-range/AC/solution.c",
+      "wrong": "c/c-prime-range/WA/solution.c",
+      "counterexample": {
+        "stdin": "2 2\n",
+        "expected_stdout": "2\n",
+        "explanation": "Bản WA duyệt đến value < B nên bỏ cận phải B. Với đoạn [2,2], vòng lặp không chạy và mã in 0 dù số 2 là số nguyên tố."
+      }
+    },
+    {
+      "slug": "c-matrix-sum",
+      "title": "C10: Tổng ma trận",
+      "correct": "c/c-matrix-sum/AC/solution.c",
+      "wrong": "c/c-matrix-sum/WA/solution.c",
+      "counterexample": {
+        "stdin": "2 3\n1 2 3\n4 5 6\n",
+        "expected_stdout": "21\n",
+        "explanation": "Bản WA đặt tổng về 0 ở đầu mỗi hàng nên chỉ giữ tổng hàng cuối. Với ma trận này, mã in 4+5+6=15 thay vì tổng toàn bộ là 21."
+      }
+    }
+  ],
+  "diagnostics": {
+    "CE": "c/_diagnostics/CE/solution.c",
+    "RE": "c/_diagnostics/RE/solution.c",
+    "TLE": "c/_diagnostics/TLE/solution.c"
+  }
+}

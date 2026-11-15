@@ -86,9 +86,9 @@ foreach ($rawCases as $c) {
 
 echo json_encode([
     'ok' => true,
-    'submission' => [
+    'submission' => array_merge($viewer['role'] === 'teacher' ? [] : ['username' => $sub['username']], [
         'id'             => (int)$sub['id'],
-        'username'       => $sub['username'],
+        'full_name'      => $sub['full_name'] ?: 'Chưa cập nhật họ tên',
         'class_names'    => $sub['class_names'] ?? '',
         'language'       => $sub['language'],
         'source_code'    => $sub['source_code'],
@@ -99,7 +99,7 @@ echo json_encode([
         'pass_count'     => (int)$sub['pass_count'],
         'total_cases'    => (int)$sub['total_cases'],
         'created_at'     => $sub['created_at'],
-    ],
+    ]),
     'runs_history' => $runs,
     'active_run_cases' => $safeCases,
 ]);

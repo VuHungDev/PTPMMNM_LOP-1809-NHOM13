@@ -9,12 +9,13 @@ $stmt = $pdo->prepare("
     SELECT p.*, pv.id AS ver_id, pv.version_number, pv.description, pv.input_desc,
            pv.output_desc, pv.sample_input, pv.sample_output, pv.time_limit_ms, pv.memory_limit_kb
     FROM problems p
-    JOIN problem_versions pv ON pv.id = p.current_version_id
-    WHERE p.id = ?
+    JOIN problem_versions pv ON pv.id = p.current_version_id AND pv.problem_id = p.id
+    WHERE p.id = ? AND (p.is_active = 1 OR ? = 1)
 ");
-$stmt->execute([$problemId]);
+$stmt->execute([$problemId, Auth::isTeacher($user) ? 1 : 0]);
 $problem = $stmt->fetch();
 if (!$problem) {
+    http_response_code(404);
     die('Không tìm thấy bài tập!');
 }
 $suggestLang = isset($problem['suggested_lang']) && JudgeEngine::isSupported($problem['suggested_lang'])
@@ -27,9 +28,14 @@ $publicCases = $stmtPub->fetchAll();
 $stmtDrafts = $pdo->prepare("SELECT language, source_code FROM drafts WHERE user_id = ? AND problem_id = ?");
 $stmtDrafts->execute([$user['id'], $problemId]);
 $savedDrafts = [];
+$draftHashes = array_fill_keys(array_keys(JudgeEngine::LANGUAGES), 'missing');
 foreach ($stmtDrafts->fetchAll() as $d) {
     $savedDrafts[$d['language']] = $d['source_code'];
+    $draftHashes[$d['language']] = hash('sha256', $d['source_code']);
 }
+// Inline JSON must never contain a literal HTML closing script tag from saved source.
+$workspaceJsonFlags = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
+    | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR;
 
 $defaults = [
     'python' => "# Nhập dữ liệu từ stdin và in kết quả ra stdout\nimport sys\n\ndef solve():\n    data = sys.stdin.read().split()\n    if not data:\n        return\n    print(int(data[0]) + int(data[1]))\n\nif __name__ == '__main__':\n    solve()",
@@ -110,7 +116,7 @@ require FE_DIR . '/partials/layout_head.php';
             </div>
             <div class="workspace-toolbar-actions">
                 <button type="button" class="btn btn-outline" x-on:click="saveDraft(true)">💾 Lưu nháp</button>
-                <button type="button" class="btn btn-outline" x-on:click="runCustomCode()">▶ Chạy thử (Custom Input)</button>
+                <button type="button" id="custom-run-btn" class="btn btn-outline" x-on:click="runCustomCode()">▶ Chạy thử (Custom Input)</button>
                 <button type="button" class="btn btn-success" x-on:click="submitSolution(false)">🚀 Nộp bài (Submit)</button>
             </div>
         </div>
@@ -145,13 +151,14 @@ require FE_DIR . '/partials/layout_head.php';
 <script>
 window.WS_CFG = {
     problemId: <?= (int)$problem['id'] ?>,
-    suggestLang: <?= json_encode($suggestLang) ?>,
-    langMeta: <?= json_encode(array_map(fn($m) => $m['monaco'], JudgeEngine::LANGUAGES)) ?>,
-    defaults: <?= json_encode($defaults, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>,
-    drafts: <?= json_encode($savedDrafts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>
+    suggestLang: <?= json_encode($suggestLang, $workspaceJsonFlags) ?>,
+    langMeta: <?= json_encode(array_map(fn($m) => $m['monaco'], JudgeEngine::LANGUAGES), $workspaceJsonFlags) ?>,
+    defaults: <?= json_encode($defaults, $workspaceJsonFlags) ?>,
+    drafts: <?= json_encode((object)$savedDrafts, $workspaceJsonFlags) ?>,
+    draftHashes: <?= json_encode($draftHashes, $workspaceJsonFlags) ?>
 };
 </script>
 <?php
-$pageScripts = '<script type="module">import "' . url('/frontend/assets/js/pages/workspace.js') . '?v=20261113-output-3";</script>';
+$pageScripts = '<script type="module">import "' . url('/frontend/assets/js/pages/workspace.js') . '?v=20261115-draft-2";</script>';
 require FE_DIR . '/partials/layout_foot.php';
 ?>

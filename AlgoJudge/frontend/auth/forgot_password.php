@@ -72,9 +72,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 $step = !empty($_SESSION['password_reset']) ? 'verify' : 'request';
 $pageTitle = 'Quên mật khẩu';
+$pageStyles = ['/frontend/assets/css/auth-login.css?v=20261114-4'];
+$pageScripts = '<script src="' . e(url('/frontend/assets/js/pages/auth-login.js?v=20261114-3')) . '" defer></script>';
 require FE_DIR . '/partials/layout_head.php';
 ?>
-<div class="auth-page"><div class="auth-form-wrap"><div class="auth-card">
+<div class="auth-page auth-page--animated">
+    <div class="auth-banner">
+        <div class="cl-brand" style="font-size:1.6rem;"><?php $logoSize = 44; require FE_DIR . '/partials/logo.php'; ?></div>
+        <div class="auth-banner__content">
+            <div class="auth-banner__copy">
+                <h1>Khôi phục mật khẩu</h1>
+                <p>Lấy lại quyền truy cập và tiếp tục hành trình lập trình của bạn.</p>
+            </div>
+            <?php require FE_DIR . '/partials/auth_banner_scene.php'; ?>
+        </div>
+    </div>
+    <div class="auth-form-wrap"><div class="auth-card">
     <h2 style="margin-bottom:16px;">Đặt lại mật khẩu</h2>
     <?php if (!$configured): ?><p role="status" style="margin-bottom:14px;">Chức năng email chưa được cấu hình. Quản trị viên cần cài thư viện PHPMailer và điền cấu hình SMTP, OTP_HASH_KEY.</p><?php endif; ?>
     <?php if ($msg): ?><div role="status" style="background:<?= $msgOk ? '#dcfce7; color:#15803d' : '#f1f5f9; color:#334155' ?>; padding:10px 14px; border-radius:8px; margin-bottom:14px;"><?= e($msg) ?></div><?php endif; ?>

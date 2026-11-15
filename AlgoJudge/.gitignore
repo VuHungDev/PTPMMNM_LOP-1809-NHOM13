@@ -2,4 +2,5 @@
 .env
 /vendor/
 /backend/tests/
+/backend/config/sandbox_images.php
 

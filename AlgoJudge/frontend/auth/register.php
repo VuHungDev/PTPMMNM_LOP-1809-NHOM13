@@ -44,16 +44,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 $pageTitle = 'Đăng ký';
+$pageStyles = ['/frontend/assets/css/auth-login.css?v=20261114-4'];
+$pageScripts = '<script src="' . e(url('/frontend/assets/js/pages/auth-login.js?v=20261114-3')) . '" defer></script>';
 require FE_DIR . '/partials/layout_head.php';
 ?>
-<div class="auth-page">
+<div class="auth-page auth-page--animated">
     <div class="auth-banner">
         <div class="cl-brand" style="font-size:1.6rem;"><?php $logoSize = 44; require FE_DIR . '/partials/logo.php'; ?></div>
-        <div>
-            <h1 style="font-size:2rem; margin-bottom:12px;">Tạo tài khoản học viên</h1>
-            <p style="opacity:0.85;">Tài khoản giảng viên / quản trị do admin cấp trong trang Quản trị.</p>
+        <div class="auth-banner__content">
+            <div class="auth-banner__copy">
+                <h1>Tạo tài khoản học viên</h1>
+                <p>Tài khoản giảng viên / quản trị do admin cấp trong trang Quản trị.</p>
+            </div>
+            <?php require FE_DIR . '/partials/auth_banner_scene.php'; ?>
         </div>
-        <div></div>
     </div>
     <div class="auth-form-wrap">
         <div class="auth-card">

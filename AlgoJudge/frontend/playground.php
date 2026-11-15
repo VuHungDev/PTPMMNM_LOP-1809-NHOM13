@@ -6,7 +6,7 @@ require_once __DIR__ . '/../backend/lib/JudgeEngine.php';
 $user = Auth::requireLogin();
 
 $samples = [
-    'python' => "# Sân chơi tự do — Python 3\n# Có sẵn: numpy, pandas, requests, sklearn, matplotlib, scipy, sympy\nimport sys\n\ndef main():\n    name = input('Nhập tên của bạn: ').strip()\n    print(f'Xin chào, {name}!')\n    a = int(input('Nhập số a: '))\n    b = int(input('Nhập số b: '))\n    print(f'{a} + {b} = {a + b}')\n\nif __name__ == '__main__':\n    main()\n",
+    'python' => "# Sân chơi tự do — Python 3\n# Thư viện chuẩn Python 3; gói ngoài chỉ khi có sẵn trong image Docker\nimport sys\n\ndef main():\n    name = input('Nhập tên của bạn: ').strip()\n    print(f'Xin chào, {name}!')\n    a = int(input('Nhập số a: '))\n    b = int(input('Nhập số b: '))\n    print(f'{a} + {b} = {a + b}')\n\nif __name__ == '__main__':\n    main()\n",
     'cpp'    => "// Sân chơi tự do — C++17\n#include <iostream>\n#include <string>\nusing namespace std;\n\nint main() {\n    ios_base::sync_with_stdio(false);\n    cin.tie(NULL);\n    string name;\n    cout << \"Nhap ten: \";\n    if (!getline(cin, name)) return 0;\n    long long a, b;\n    cin >> a >> b;\n    cout << \"Xin chao, \" << name << \"! Tong = \" << (a + b) << \"\\n\";\n    return 0;\n}\n",
     'c'      => "// Sân chơi tự do — C11\n#include <stdio.h>\n\nint main(void) {\n    char name[64];\n    long long a, b;\n    printf(\"Nhap ten: \");\n    if (!fgets(name, sizeof(name), stdin)) return 0;\n    printf(\"Nhap a b: \");\n    if (scanf(\"%lld %lld\", &a, &b) == 2) {\n        printf(\"Xin chao! Tong = %lld\\n\", a + b);\n    }\n    return 0;\n}\n",
     'java'   => "// Sân chơi tự do — Java (lớp chính phải tên Main)\nimport java.util.*;\n\npublic class Main {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        System.out.print(\"Nhap ten: \");\n        String name = sc.nextLine();\n        System.out.print(\"Nhap a b: \");\n        long a = sc.nextLong(), b = sc.nextLong();\n        System.out.println(\"Xin chao, \" + name + \"! Tong = \" + (a + b));\n    }\n}\n",
@@ -42,11 +42,13 @@ require FE_DIR . '/partials/layout_head.php';
             </div>
             <div id="pg-tab-libs" x-show="pgTab === 'libs'">
                 <div style="font-size:0.86rem; line-height:1.7; padding-top:12px;">
-                    <p><strong>Python 3.13:</strong> <code>numpy, pandas, networkx, nltk, pyjwt, cryptography, Pillow, lxml, beautifulsoup4, Flask, sortedcontainers, requests, scikit-learn, matplotlib, scipy, sympy</code> + thư viện chuẩn (<code>math, re, json, itertools, collections, heapq, random, statistics, fractions, decimal...</code>).</p>
-                    <p><strong>Node.js 24:</strong> gói sandbox <code>lodash, mathjs, dayjs, big.js, seedrandom</code> (<code>require()</code> trực tiếp) + module chuẩn <code>fs, path, readline, util, events, crypto, os</code>.</p>
-                    <p><strong>PHP 8.0:</strong> <code>gd, intl, gmp, mbstring, curl, openssl, sockets, soap, sodium, sqlite3, tidy, xsl, json, xml, zip...</code> + MySQL (pdo_mysql).</p>
-                    <p><strong>Java 24:</strong> toàn bộ thư viện chuẩn JDK (lớp chính phải tên <code>Main</code>).</p>
-                    <p><strong>C (gcc 13) / C++17 (g++ 13):</strong> thư viện chuẩn đầy đủ — C (<code>stdio, stdlib, string, math, time...</code>), C++ STL (<code>vector, map, set, algorithm, queue, stack, string...</code>). Thư viện ngoài liên hệ quản trị viên.</p>
+                    <p>Chương trình được biên dịch và chạy trong <strong>Docker Linux cách ly</strong>, không dùng thư viện hay tệp cài trên máy chủ. Mỗi lần chạy nhận toàn bộ stdin từ ô bên cạnh, không nhập tương tác trong console.</p>
+                    <p><strong>Python 3:</strong> dùng thư viện chuẩn (<code>math, re, json, itertools, collections, heapq, statistics, fractions, decimal...</code>). Gói ngoài chỉ dùng được nếu quản trị viên đã đóng sẵn trong image Docker; không tự cài gói khi chạy.</p>
+                    <p><strong>Node.js 22:</strong> module chuẩn <code>fs, path, readline, util, events, crypto...</code>; đọc stdin bằng <code>fs.readFileSync(0, 'utf8')</code>. Gói npm ngoài chỉ dùng được nếu đã đóng sẵn trong image.</p>
+                    <p><strong>PHP 8.2 CLI:</strong> chạy với <code>-n</code> (không nạp php.ini của máy chủ), chỉ dùng hàm và extension tích hợp sẵn trong image; đọc dữ liệu từ <code>php://stdin</code>.</p>
+                    <p><strong>Java 17:</strong> thư viện chuẩn JDK, lớp chính phải tên <code>Main</code>.</p>
+                    <p><strong>C11 / C++17:</strong> thư viện chuẩn C (<code>stdio, stdlib, string, math...</code>) và C++ STL (<code>vector, map, set, algorithm, queue, stack, string...</code>).</p>
+                    <p><strong>Giới hạn:</strong> mã nguồn tối đa 256 KiB, stdin tối đa 60.000 byte, thời gian chạy 10 giây. Không truy cập internet, mạng hoặc MySQL/dịch vụ trên máy chủ. Phiên bản chi tiết và thư viện bổ sung phụ thuộc image Docker đã được quản trị viên kiểm duyệt.</p>
                 </div>
             </div>
         </div>
@@ -63,7 +65,7 @@ require FE_DIR . '/partials/layout_head.php';
                 </select>
             </div>
             <div style="display:flex; gap:8px;">
-                <button class="btn btn-outline" x-on:click="clear()">🗑 Xóa kết quả</button>
+                <button class="aj-icon-action aj-icon-action--delete aj-icon-action--dark" aria-label="Xóa kết quả" data-action-label="Xóa kết quả" title="Xóa kết quả" x-on:click="clear()"><?= aj_action_icon('delete') ?></button>
                 <button class="btn btn-success" id="pg-run-btn" x-on:click="run()">▶ Chạy (Ctrl+Enter)</button>
             </div>
         </div>
@@ -93,14 +95,14 @@ require FE_DIR . '/partials/layout_head.php';
 </div>
 
 <script>
-window.PG_LANG_META = <?= json_encode(array_map(fn($m) => $m['monaco'], JudgeEngine::LANGUAGES)) ?>;
-window.PG_SAMPLES = <?= json_encode($samples, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
+window.PG_LANG_META = <?= json_encode(array_map(fn($m) => $m['monaco'], JudgeEngine::LANGUAGES), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+window.PG_SAMPLES = <?= json_encode($samples, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
 </script>
 <style>
 .pg-error-line { background: rgba(239, 68, 68, 0.22) !important; }
 .pg-error-glyph { background: #ef4444; width: 5px !important; margin-left: 3px; border-radius: 2px; }
 </style>
 <?php
-$pageScripts = '<script type="module">import "' . url('/frontend/assets/js/pages/playground.js') . '";</script>';
+$pageScripts = '<script type="module">import "' . url('/frontend/assets/js/pages/playground.js') . '?v=20261115-playground-5";</script>';
 require FE_DIR . '/partials/layout_foot.php';
 ?>

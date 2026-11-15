@@ -22,6 +22,14 @@ try {
     if ($pdo->inTransaction()) throw new LogicException('Judging request requires its own transaction.');
     $pdo->beginTransaction();
     $ownsTransaction = true;
+    // Users precede submission/run locks, including AuditLog's actor recheck.
+    $stmtActor = $pdo->prepare('SELECT role, is_active, auth_version FROM users WHERE id = ? FOR UPDATE');
+    $stmtActor->execute([(int)$user['id']]);
+    $actor = $stmtActor->fetch();
+    if (!$actor || !in_array($actor['role'], ['teacher', 'admin'], true) || (int)$actor['is_active'] !== 1
+        || !isset($user['auth_version']) || (int)$actor['auth_version'] !== (int)$user['auth_version']) {
+        throw new DomainException('Quyền tài khoản đã thay đổi. Hãy đăng nhập lại.', 403);
+    }
     // Resolve the parent first; all queue entry points lock submission then run.
     $stmtParent = $pdo->prepare('SELECT submission_id FROM judging_runs WHERE id = ?');
     $stmtParent->execute([$runId]);
@@ -63,8 +71,12 @@ try {
     $stmtIns = $pdo->prepare("INSERT INTO judging_runs (submission_id, problem_version_id, run_number, trigger_type, triggered_by, status, verdict) VALUES (?, ?, ?, 'SYS_RETRY', ?, 'QUEUED', 'PENDING')");
     $stmtIns->execute([$submissionId, $run['problem_version_id'], $nextRunNum, $user['id']]);
     $newRunId = (int)$pdo->lastInsertId();
-    $pdo->prepare("UPDATE judging_runs SET status = 'SYS_ERROR', verdict = 'SYS_ERR', system_error_detail = CONCAT(COALESCE(system_error_detail, ''), ' | Superseded by retry run #', ?), finished_at = COALESCE(finished_at, NOW()) WHERE id = ?")
+    // Preserve terminal SYS_ERROR evidence; cancel only an in-flight old owner.
+    $pdo->prepare("UPDATE judging_runs SET status = 'SYS_ERROR', verdict = 'SYS_ERR', system_error_detail = CONCAT(COALESCE(system_error_detail, ''), ' | Superseded by retry run #', ?), finished_at = COALESCE(finished_at, NOW()) WHERE id = ? AND status IN ('QUEUED', 'RUNNING')")
         ->execute([$newRunId, $runId]);
+    // Reserve ownership before releasing the parent lock; a canceled worker can
+    // neither append cases nor publish a result while its replacement is queued.
+    $pdo->prepare('UPDATE submissions SET latest_run_id = ? WHERE id = ?')->execute([$newRunId, $submissionId]);
     AuditLog::record($pdo, $user, 'judge.retry', 'run', $newRunId, [
         'previous_run_id' => $runId, 'submission_id' => $submissionId,
         'problem_id' => (int)$sub['problem_id'], 'version_number' => (int)$versionNumber, 'source' => 'api',

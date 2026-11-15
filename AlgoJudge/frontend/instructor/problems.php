@@ -111,19 +111,19 @@ require FE_DIR . '/partials/layout_head.php';
                     <td style="padding:8px;"><?= (int)$p['sub_count'] ?></td>
                     <td style="padding:8px;"><?= $p['is_active'] ? '<span class="badge verdict-AC">Hiện</span>' : '<span class="badge verdict-CE">Ẩn</span>' ?></td>
                     <td style="padding:8px; text-align:right; white-space:nowrap;">
-                        <a class="btn btn-primary" style="padding:4px 10px; font-size:0.78rem;" href="<?= url('/frontend/instructor/problem_form.php?edit=' . (int)$p['id']) ?>">Sửa</a>
+                        <a class="aj-icon-action aj-icon-action--edit" href="<?= url('/frontend/instructor/problem_form.php?edit=' . (int)$p['id']) ?>" aria-label="Sửa" data-action-label="Sửa" title="Sửa"><?= aj_action_icon('edit') ?></a>
                         <form method="POST" style="display:inline;" onsubmit="return confirm('Đổi trạng thái hiển thị bài này?');">
                             <?= csrf_field() ?>
                             <input type="hidden" name="action" value="toggle">
                             <input type="hidden" name="problem_id" value="<?= (int)$p['id'] ?>">
-                            <button class="btn" style="background:#e2e8f0; padding:4px 10px; font-size:0.78rem;"><?= $p['is_active'] ? 'Ẩn' : 'Hiện' ?></button>
+                            <button type="submit" class="aj-icon-action aj-icon-action--<?= $p['is_active'] ? 'hide' : 'show' ?>" aria-label="<?= $p['is_active'] ? 'Ẩn' : 'Hiện' ?>" data-action-label="<?= $p['is_active'] ? 'Ẩn' : 'Hiện' ?>" title="<?= $p['is_active'] ? 'Ẩn' : 'Hiện' ?>"><?= aj_action_icon($p['is_active'] ? 'hide' : 'show') ?></button>
                         </form>
                         <?php if ($user['role'] === 'admin'): ?>
                         <form method="POST" style="display:inline;" onsubmit="return confirm('XÓA VĨNH VIỄN bài #<?= (int)$p['id'] ?> cùng toàn bộ bài nộp? Không thể hoàn tác.');">
                             <?= csrf_field() ?>
                             <input type="hidden" name="action" value="delete">
                             <input type="hidden" name="problem_id" value="<?= (int)$p['id'] ?>">
-                            <button class="btn" style="background:#fee2e2; color:#b91c1c; padding:4px 10px; font-size:0.78rem;">Xóa</button>
+                            <button class="aj-icon-action aj-icon-action--delete" aria-label="Xóa" data-action-label="Xóa" title="Xóa"><?= aj_action_icon('delete') ?></button>
                         </form>
                         <?php endif; ?>
                     </td>

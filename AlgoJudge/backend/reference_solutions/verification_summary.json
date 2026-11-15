@@ -1,0 +1,33 @@
+{
+  "verified_on": "2026-11-15",
+  "execution_backend": "DockerSandbox (Linux containers, non-root, no network)",
+  "scope": "60 standard exercises: 10 Python, 10 C, 10 C++, 10 Java, 10 PHP, 10 JavaScript; not 60 translations per language",
+  "standalone_correct_sources": 60,
+  "standalone_wrong_sources": 60,
+  "intentional_diagnostics": {"CE": 6, "RE": 6, "TLE": 6},
+  "verification_run": {"checks": 1772, "exercises": 60, "failures": 0, "legacy_dataset_observations": 7},
+  "by_language": {
+    "python": {"checks": 296, "exercises": 10, "failures": 0},
+    "c": {"checks": 294, "exercises": 10, "failures": 0},
+    "cpp": {"checks": 298, "exercises": 10, "failures": 0},
+    "java": {"checks": 290, "exercises": 10, "failures": 0},
+    "php": {"checks": 298, "exercises": 10, "failures": 0},
+    "js": {"checks": 296, "exercises": 10, "failures": 0}
+  },
+  "current_sources_and_tools_sha256": "057f99fb6eed96b57a208170c8f83afe95a1dc005a74dcc454276629e58cb99c",
+  "browser_validation": {"checks": 15, "failures": 0, "database": "isolated algojudge_test_*", "editor": "test-only Monaco API shim; real app handlers, HTTP, queue and Docker"},
+  "dataset_corrections_applied": [
+    {"slug": "c-mult-table", "version": 2, "version_id": 80, "change": "Complete all N multiplication rows"},
+    {"slug": "cpp-two-sum-idx", "version": 2, "version_id": 81, "change": "Use inputs with exactly one valid pair"},
+    {"slug": "js-two-sum", "version": 2, "version_id": 82, "change": "Use an input with exactly one valid pair"},
+    {"slug": "js-palindrome-str", "version": 2, "version_id": 83, "change": "AbA is YES under the statement's case-sensitive palindrome rule"}
+  ],
+  "preservation": "Old versions/test cases unchanged; submissions, judging runs, case results and users/XP matched pre-change hashes. Draft table changed concurrently during an open editing session; the additive correction script never writes drafts.",
+  "notes": [
+    "This records one completed real Docker run, not a guarantee for arbitrary future source/image/catalog edits. Re-run verify.php after changes.",
+    "AC follows problem statements; legacy ambiguous or incorrect test fixtures remain explicitly recorded in catalog.php.",
+    "WA is demonstrated by a concrete valid counterexample in each language manifest; it is not necessarily wrong on every seed test.",
+    "The completed sequential per-language run includes the final Unicode fixes in C/C++/PHP and the corrected v2 Two Sum boundary fixtures. All six completed JSON reports were checked before merging."
+
+  ]
+}

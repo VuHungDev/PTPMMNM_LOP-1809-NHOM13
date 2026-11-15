@@ -23,6 +23,23 @@ try {
     if ($pdo->inTransaction()) throw new LogicException('Judging request requires its own transaction.');
     $pdo->beginTransaction();
     $ownsTransaction = true;
+    // Lock actor and owner in ascending user order before submission/run locks.
+    // The owner is also referenced when importing an original legacy AC below.
+    $stmtOwner = $pdo->prepare('SELECT user_id FROM submissions WHERE id = ?');
+    $stmtOwner->execute([$submissionId]);
+    $ownerId = (int)$stmtOwner->fetchColumn();
+    $userIds = [(int)$user['id'], $ownerId];
+    sort($userIds, SORT_NUMERIC);
+    $stmtActor = $pdo->prepare('SELECT id, role, is_active, auth_version FROM users WHERE id IN (?, ?) ORDER BY id FOR UPDATE');
+    $stmtActor->execute($userIds);
+    $actor = null;
+    foreach ($stmtActor->fetchAll() as $lockedUser) {
+        if ((int)$lockedUser['id'] === (int)$user['id']) $actor = $lockedUser;
+    }
+    if (!$actor || !in_array($actor['role'], ['teacher', 'admin'], true) || (int)$actor['is_active'] !== 1
+        || !isset($user['auth_version']) || (int)$actor['auth_version'] !== (int)$user['auth_version']) {
+        throw new DomainException('Quyền tài khoản đã thay đổi. Hãy đăng nhập lại.', 403);
+    }
     // Both rejudge and retry lock the submission before checking/allocating runs.
     $stmtSub = $pdo->prepare('SELECT * FROM submissions WHERE id = ? FOR UPDATE');
     $stmtSub->execute([$submissionId]);
@@ -49,12 +66,24 @@ try {
     if ($stmtDup->fetch()) {
         throw new DomainException('Bài nộp này đang có một lượt chấm khác chờ/xử lý. Vui lòng đợi xong rồi mới chấm lại.', 409);
     }
-    $stmtMax = $pdo->prepare('SELECT COALESCE(MAX(run_number), 0) + 1 FROM judging_runs WHERE submission_id = ?');
+    // Preserve a real legacy accepted result before a rejudge can replace its
+    // only evidence. This imports existing score/verdict, never changes old XP,
+    // source or cases and does not claim a new execution happened.
+    if ($sub['final_verdict'] === 'AC') {
+        $pdo->prepare("INSERT INTO judging_runs (submission_id, problem_version_id, run_number, trigger_type, triggered_by, status, verdict, score, pass_count, total_cases, finished_at, system_error_detail)
+            SELECT id, problem_version_id, 1, 'INITIAL', user_id, 'COMPLETED', 'AC', final_score, pass_count, total_cases, created_at, 'Imported original accepted result (no new execution)'
+            FROM submissions WHERE id = ? AND NOT EXISTS (SELECT 1 FROM judging_runs WHERE submission_id = ?)")
+            ->execute([$submissionId, $submissionId]);
+    }
+    $stmtMax = $pdo->prepare('SELECT id, run_number FROM judging_runs WHERE submission_id = ? ORDER BY run_number DESC, id DESC LIMIT 1 FOR UPDATE');
     $stmtMax->execute([$submissionId]);
-    $nextRunNum = (int)$stmtMax->fetchColumn();
+    $previousRun = $stmtMax->fetch();
+    $nextRunNum = $previousRun ? (int)$previousRun['run_number'] + 1 : 1;
     $stmtIns = $pdo->prepare("INSERT INTO judging_runs (submission_id, problem_version_id, run_number, trigger_type, triggered_by, status, verdict) VALUES (?, ?, ?, 'REJUDGE', ?, 'QUEUED', 'PENDING')");
     $stmtIns->execute([$submissionId, $targetVersionId, $nextRunNum, $user['id']]);
     $newRunId = (int)$pdo->lastInsertId();
+    // Ownership is reserved atomically, without rewriting the previous verdict.
+    $pdo->prepare('UPDATE submissions SET latest_run_id = ? WHERE id = ?')->execute([$newRunId, $submissionId]);
 
     // This event records accepted work, not its eventual judge verdict.
     AuditLog::record($pdo, $user, 'judge.rejudge', 'run', $newRunId, [

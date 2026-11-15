@@ -148,7 +148,11 @@ require FE_DIR . '/partials/layout_head.php';
                     <td style="padding:14px 20px; color:var(--cl-muted); font-size:0.9rem;"><?= (int)$p['time_limit_ms'] ?> ms</td>
                     <td style="padding:14px 20px; font-size:0.9rem;" title="<?= (int)$p['ac_users'] ?> / <?= (int)$p['tried_users'] ?> người giải đúng"><?= (int)$p['tried_users'] > 0 ? round((int)$p['ac_users'] / (int)$p['tried_users'] * 100) . '%' : '—' ?></td>
                     <td style="padding:14px 20px; text-align:right;">
-                        <a href="<?= url('/frontend/workspace.php?id=' . (int)$p['id']) ?>" class="btn btn-primary" style="padding:6px 14px;"><?= $isStudent ? 'Làm bài' : 'Xem / chạy thử' ?> →</a>
+                        <?php if ($isStudent): ?>
+                            <a href="<?= url('/frontend/workspace.php?id=' . (int)$p['id']) ?>" class="btn btn-primary" style="padding:6px 14px;">Làm bài →</a>
+                        <?php else: ?>
+                            <a href="<?= url('/frontend/workspace.php?id=' . (int)$p['id']) ?>" class="aj-icon-action aj-icon-action--view" aria-label="Xem / chạy thử" data-action-label="Xem / chạy thử" title="Xem / chạy thử"><?= aj_action_icon('view') ?></a>
+                        <?php endif; ?>
                     </td>
                 </tr>
                 <?php endforeach; ?>
